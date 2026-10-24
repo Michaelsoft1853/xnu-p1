@@ -787,6 +787,76 @@ static struct pe_serial_functions pi3_uart_serial_functions =
 
 #endif /* PI3_UART */
 /*****************************************************************************/
+
+/* PL011 driver for QEMU virt */
+static int pl011_tr0(void)
+{
+	return !(*(volatile uint32_t *)(uart_base + 0x18) & 0x20);
+}
+
+static void pl011_td0(int c)
+{
+	*(volatile uint32_t *)(uart_base + 0x00) = (uint32_t)(c & 0xff);
+}
+
+static int pl011_rr0(void)
+{
+	return !(*(volatile uint32_t *)(uart_base + 0x18) & 0x10);
+}
+
+static int pl011_rd0(void)
+{
+	return (int)(*(volatile uint32_t *)(uart_base + 0x00) & 0xff);
+}
+
+static void pl011_uart_init(void)
+{
+	*(volatile uint32_t *)(uart_base + 0x30) = (1 << 0) | (1 << 8);
+}
+
+static struct pe_serial_functions pl011_serial_functions = {
+	.uart_init = pl011_uart_init,
+	.uart_set_baud_rate = NULL,
+	.tr0 = pl011_tr0,
+	.td0 = pl011_td0,
+	.rr0 = pl011_rr0,
+	.rd0 = pl011_rd0,
+};
+
+/* Ramoops persistent console driver for OnePlus 2 hardware */
+struct op2_ramoops_buffer {
+	uint32_t sig;
+	uint32_t start;
+	uint32_t size;
+	char data[];
+};
+static volatile struct op2_ramoops_buffer *g_ramoops_buf = NULL;
+
+static int op2_ramoops_tr0(void) { return 1; }
+static int op2_ramoops_rr0(void) { return 0; }
+static int op2_ramoops_rd0(void) { return 0; }
+static void op2_ramoops_td0(int c)
+{
+	if (!g_ramoops_buf) return;
+	uint32_t sz = g_ramoops_buf->size;
+	if (sz < 260000) {
+		g_ramoops_buf->data[sz] = (char)c;
+		g_ramoops_buf->start = sz + 1;
+		g_ramoops_buf->size = sz + 1;
+	}
+}
+static void op2_ramoops_init(void)
+{
+}
+static struct pe_serial_functions op2_ramoops_serial_functions = {
+	.uart_init = op2_ramoops_init,
+	.uart_set_baud_rate = NULL,
+	.tr0 = op2_ramoops_tr0,
+	.td0 = op2_ramoops_td0,
+	.rr0 = op2_ramoops_rr0,
+	.rd0 = op2_ramoops_rd0,
+};
+
 int
 serial_init(void)
 {
@@ -951,7 +1021,22 @@ serial_init(void)
 		gPESF = &uart16x50_serial_functions;
 	}
 #endif
-	else {
+
+	if (serial_compat && (!strcmp(serial_compat, "arm,pl011") || !strcmp(serial_compat, "pl011"))) {
+		gPESF = &pl011_serial_functions;
+	}
+
+	if (!gPESF) {
+		if (DTFindEntry("name", "op2-fbcon", &entryP) == kSuccess) {
+			DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size);
+			g_ramoops_buf = (volatile struct op2_ramoops_buffer *)ml_io_map(*reg_prop, *(reg_prop + 1));
+			if (g_ramoops_buf) {
+				gPESF = &op2_ramoops_serial_functions;
+			}
+		}
+	}
+
+	if (!gPESF) {
 		return 0;
 	}
 

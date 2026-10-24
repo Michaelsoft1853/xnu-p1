@@ -720,6 +720,17 @@ halt_all_cpus(boolean_t reboot)
 	if (reboot) {
 		printf("MACH Reboot\n");
 		PEHaltRestart(kPERestartCPU);
+#ifdef ARM64_BOARD_CONFIG_MSM8994
+		DTEntry uart_entry;
+		if (DTFindEntry("name", "uart0", &uart_entry) != kSuccess) {
+			printf("Resetting via MSM8994 PS_HOLD...\n");
+			volatile uint32_t *ps_hold = (volatile uint32_t *)ml_io_map(0xfc4ab000, 0x1000);
+			if (ps_hold) {
+				*ps_hold = 0;
+				for (;;) { ; }
+			}
+		}
+#endif
 	} else {
 		printf("CPU halted\n");
 		PEHaltRestart(kPEHaltCPU);
