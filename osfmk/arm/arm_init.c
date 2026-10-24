@@ -229,7 +229,7 @@ arm_init(
 
 
 	{
-		unsigned int    tmp_16k = 0;
+		__unused unsigned int tmp_16k = 0;
 
 #ifdef  XXXX
 		/*
@@ -246,8 +246,16 @@ arm_init(
 		 * Select the advertised kernel page size; with the boot-arg
 		 * use to the hardware page size for the current platform.
 		 */
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+		/* MSM8994 Cortex-A57/A53 uses 4 KB hardware page granule */
+		PAGE_SHIFT_CONST = ARM_PGSHIFT;
+		page_shift_user32 = PAGE_SHIFT_CONST;
+#else
 		int radar_20804515 = 1; /* default: new mode */
 		PE_parse_boot_argn("radar_20804515", &radar_20804515, sizeof(radar_20804515));
+		if (PE_parse_boot_argn("-use_hwpagesize", &tmp_16k, sizeof(tmp_16k))) {
+			radar_20804515 = 0;
+		}
 		if (radar_20804515) {
 			if (args->memSize > 1ULL * 1024 * 1024 * 1024) {
 				/*
@@ -275,6 +283,7 @@ arm_init(
 			/* old mode: 32-bit apps see same page size as kernel */
 			page_shift_user32 = PAGE_SHIFT_CONST;
 		}
+#endif
 #endif
 #ifdef  APPLETYPHOON
 		if (PE_parse_boot_argn("cpus_defeatures", &cpus_defeatures, sizeof(cpus_defeatures))) {
@@ -405,6 +414,20 @@ arm_init(
 	PE_init_kprintf(FALSE);
 
 	kprintf("kprintf initialized\n");
+
+	extern unsigned long gPhysBase, gPhysSize;
+	extern vm_size_t mem_size;
+	extern uint64_t sane_size, max_mem;
+	extern vm_offset_t first_avail, avail_start;
+	extern pmap_paddr_t avail_end, real_avail_end;
+
+	kprintf("[MEM_DEBUG] xmaxmem=0x%llx, args->memSize=0x%llx, args->physBase=0x%llx\n",
+	        (uint64_t)xmaxmem, (uint64_t)args->memSize, (uint64_t)args->physBase);
+	kprintf("[MEM_DEBUG] gPhysBase=0x%lx, gPhysSize=0x%lx, page_shift=%u, page_size=%lu\n",
+	        gPhysBase, gPhysSize, PAGE_SHIFT_CONST, (unsigned long)PAGE_SIZE);
+	kprintf("[MEM_DEBUG] mem_size=0x%lx, sane_size=0x%llx, max_mem=0x%llx\n", (unsigned long)mem_size, sane_size, max_mem);
+	kprintf("[MEM_DEBUG] avail_start=0x%lx, avail_end=0x%llx, real_avail_end=0x%llx, first_avail=0x%lx\n",
+	        (unsigned long)avail_start, (uint64_t)avail_end, (uint64_t)real_avail_end, (unsigned long)first_avail);
 
 	serialmode = 0;                                                      /* Assume normal keyboard and console */
 	if (PE_parse_boot_argn("serial", &serialmode, sizeof(serialmode))) { /* Do we want a serial
