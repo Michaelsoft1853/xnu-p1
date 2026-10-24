@@ -720,7 +720,11 @@ msm8994_panic_reset(void)
 {
 	DTEntry uart_entry;
 	if (DTFindEntry("name", "uart0", &uart_entry) != kSuccess) {
-		printf("Resetting via MSM8994 PS_HOLD...\n");
+		printf("Resetting via MSM8994 PS_HOLD to Recovery...\n");
+		volatile uint32_t *imem = (volatile uint32_t *)ml_io_map(0xfe87f000, 0x1000);
+		if (imem) {
+			*(volatile uint32_t *)((uintptr_t)imem + 0x65c) = 0x77665502;
+		}
 		volatile uint32_t *ps_hold = (volatile uint32_t *)ml_io_map(0xfc4ab000, 0x1000);
 		if (ps_hold) {
 			*ps_hold = 0;
