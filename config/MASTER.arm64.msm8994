@@ -40,7 +40,7 @@
 #  IOKIT_RELEASE =  [ IOKIT_BASE ]
 #  IOKIT_DEV =      [ IOKIT_BASE iokitstats iotracking ]
 #  IOKIT_DEBUG =    [ IOKIT_BASE iokitstats iotracking]
-#  LIBKERN_BASE =   [ libkerncpp config_kec_fips zlib crypto_sha2 ]
+#  LIBKERN_BASE =   [ libkerncpp config_blocks config_kec_fips zlib crypto_sha2 ]
 #  LIBKERN_RELEASE =[ LIBKERN_BASE ]
 #  LIBKERN_DEV =    [ LIBKERN_BASE iotracking ]
 #  LIBKERN_DEBUG =  [ LIBKERN_BASE iotracking ]

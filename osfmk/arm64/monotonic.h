@@ -29,6 +29,14 @@
 #define ARM64_MONOTONIC_H
 
 #include <sys/cdefs.h>
+#include <stdint.h>
+
+#define MT_NDEVS 1
+
+#define MT_CORE_CYCLES 0
+#define MT_CORE_INSTRS 1
+#define MT_CORE_NFIXED 2
+#define MT_CORE_MAXVAL ((UINT64_C(1) << 48) - 1)
 
 #if MONOTONIC
 
@@ -41,15 +49,6 @@ __BEGIN_DECLS
 #if MONOTONIC && !CPMU_AIC_PMI
 #define MONOTONIC_FIQ 1
 #endif /* MONOTONIC && !CPMU_AIC_PMI */
-
-#include <stdint.h>
-
-#define MT_NDEVS 1
-
-#define MT_CORE_CYCLES 0
-#define MT_CORE_INSTRS 1
-#define MT_CORE_NFIXED 2
-#define MT_CORE_MAXVAL ((UINT64_C(1) << 48) - 1)
 
 __END_DECLS
 

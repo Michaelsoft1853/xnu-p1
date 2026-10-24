@@ -430,8 +430,8 @@ LDFLAGS_KERNEL_GEN = \
 	-Wl,-function_starts \
 	-Wl,-headerpad,152
 
-# LDFLAGS_KERNEL_SDK	= -L$(SDKROOT)/usr/local/lib/kernel -lfirehose_kernel
-LDFLAGS_KERNEL_SDK	= -L$(SDKROOT)/usr/local/lib/kernel
+# LDFLAGS_KERNEL_SDK	= -L$(SDKROOT)/usr/local/lib/kernel -L$(SRCROOT)/lib -lfirehose_kernel
+LDFLAGS_KERNEL_SDK	= -L$(SDKROOT)/usr/local/lib/kernel -L$(SRCROOT)/lib
 
 LDFLAGS_KERNEL_RELEASE	=
 LDFLAGS_KERNEL_DEVELOPMENT     =
@@ -614,12 +614,17 @@ LDFLAGS_KERNEL_EXPORTS   =   \
 #
 # Default runtime libraries to be linked with the kernel
 #
-LD_KERNEL_LIBS	   = -lcc_kext
+LD_KERNEL_LIBS	   = $(SRCROOT)/lib/libcc_kext.a
 LD_KERNEL_ARCHIVES = $(LDFLAGS_KERNEL_SDK) -lfirehose_kernel
 
 #
 # DTrace support
 #
+ifeq ($(CTFCONVERT),)
+DO_CTFCONVERT = 0
+DO_CTFMERGE   = 0
+DO_CTFMACHO   = 0
+else
 ifeq ($(CURRENT_KERNEL_CONFIG),RELEASE)
 ifneq ($(filter ARM%,$(CURRENT_ARCH_CONFIG)),)
 DO_CTFCONVERT = 0
@@ -634,6 +639,7 @@ else
 DO_CTFCONVERT = $(SUPPORTS_CTFCONVERT)
 DO_CTFMERGE   = 1
 DO_CTFMACHO   = $(NEEDS_CTF_MACHOS)
+endif
 endif
 
 #

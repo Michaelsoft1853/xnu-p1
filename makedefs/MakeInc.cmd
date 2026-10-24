@@ -29,9 +29,9 @@ endif
 VERBOSE_GENERATED_MAKE_FRAGMENTS = NO
 
 ifeq ($(VERBOSE),YES)
-	XCRUN = /usr/bin/xcrun -verbose
+	XCRUN ?= xcrun -verbose
 else
-	XCRUN = /usr/bin/xcrun
+	XCRUN ?= xcrun
 endif
 
 SDKROOT ?= macosx

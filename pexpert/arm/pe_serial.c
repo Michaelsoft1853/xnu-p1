@@ -794,7 +794,7 @@ serial_init(void)
 	uint32_t        prop_size, dccmode;
 	vm_offset_t     soc_base;
 	uintptr_t       *reg_prop;
-	uint32_t        *prop_value = NULL;
+	__unused uint32_t *prop_value = NULL;
 	char            *serial_compat = 0;
 #ifdef SHMCON
 	uint32_t        jconmode;
