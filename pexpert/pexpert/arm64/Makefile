@@ -21,7 +21,8 @@ DATAFILES = \
 	typhoon.h \
 	twister.h \
 	hurricane.h \
-	BCM2837.h
+	BCM2837.h \
+	MSM8994.h
 
 
 INSTALL_MD_LIST	= ${DATAFILES}

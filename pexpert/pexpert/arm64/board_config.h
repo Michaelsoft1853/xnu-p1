@@ -174,4 +174,14 @@
 #define CPU_COUNT 4
 #endif  /* ARM64_BOARD_CONFIG_BCM2837 */
 
+#ifdef ARM64_BOARD_CONFIG_MSM8994
+#define MSM8994
+#define MSM8994_BRINGUP
+#define ARM_ARCH_TIMER
+#include <pexpert/arm64/MSM8994.h>
+#define __ARM_L2CACHE_SIZE_LOG__ 21
+#define ARM_BOARD_CLASS_MSM8994
+#define CPU_COUNT 1
+#endif  /* ARM64_BOARD_CONFIG_MSM8994 */
+
 #endif /* ! _PEXPERT_ARM_BOARD_CONFIG_H */

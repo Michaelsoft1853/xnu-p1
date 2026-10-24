@@ -325,6 +325,10 @@ static struct tbd_ops    t8015_funcs = {NULL, NULL, NULL};
 static struct tbd_ops    bcm2837_funcs = {NULL, NULL, NULL};
 #endif /* defined(ARM_BOARD_CLASS_BCM2837) */
 
+#if defined(ARM_BOARD_CLASS_MSM8994)
+static struct tbd_ops    msm8994_funcs = {NULL, NULL, NULL};
+#endif /* defined(ARM_BOARD_CLASS_MSM8994) */
+
 vm_offset_t     gPicBase;
 vm_offset_t     gTimerBase;
 vm_offset_t     gSocPhys;
@@ -686,6 +690,11 @@ pe_arm_init_timer(void *args)
 #if defined(ARM_BOARD_CLASS_BCM2837)
 	if (!strcmp(gPESoCDeviceType, "bcm2837-io")) {
 		tbd_funcs = &bcm2837_funcs;
+	} else
+#endif
+#if defined(ARM_BOARD_CLASS_MSM8994)
+	if (!strcmp(gPESoCDeviceType, "op2-io") || !strcmp(gPESoCDeviceType, "msm8994-io")) {
+		tbd_funcs = &msm8994_funcs;
 	} else
 #endif
 	return 0;

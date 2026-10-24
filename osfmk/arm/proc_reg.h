@@ -184,7 +184,7 @@
 #define __PLATFORM_WKDM_ALIGNMENT_BOUNDARY__ (64)
 #define __ARM_CLUSTER_COUNT__ 2
 
-#elif defined (BCM2837)
+#elif defined (BCM2837) || defined (MSM8994)
 #define __ARM_ARCH__    8
 #define __ARM_VMSA__    8
 #define __ARM_SMP__     1
@@ -328,7 +328,7 @@
 
 #define DFSR_WRITE              0x00000800      /* write data abort fault */
 
-#if defined (ARMA7) || defined (APPLE_ARM64_ARCH_FAMILY) || defined (BCM2837)
+#if defined (ARMA7) || defined (APPLE_ARM64_ARCH_FAMILY) || defined (BCM2837) || defined (MSM8994)
 
 #define TEST_FSR_VMFAULT(status)        \
 	                        (((status) == FSR_PFAULT)       \
@@ -538,7 +538,7 @@
 #define L2_SWAY (L2_CSIZE - L2_NWAY)            /* set size 1<<L2_SWAY */
 #define L2_NSET (L2_SWAY - L2_CLINE)            /* lines per way 1<<L2_NSET */
 
-#elif defined (BCM2837) /* Raspberry Pi 3 */
+#elif defined (BCM2837) || defined (MSM8994) /* Raspberry Pi 3 */
 
 /* I-Cache. We don't have detailed spec so we just follow the ARM technical reference. */
 #define MMU_I_CLINE     6
