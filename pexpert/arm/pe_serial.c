@@ -841,8 +841,10 @@ static void op2_ramoops_td0(int c)
 	uint32_t sz = g_ramoops_buf->size;
 	if (sz < 260000) {
 		g_ramoops_buf->data[sz] = (char)c;
+		__asm__ volatile("dmb oshst" ::: "memory");
 		g_ramoops_buf->start = sz + 1;
 		g_ramoops_buf->size = sz + 1;
+		__asm__ volatile("dmb oshst" ::: "memory");
 	}
 }
 static void op2_ramoops_init(void)
