@@ -807,11 +807,19 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
 	panic_stop();
 }
 
+#ifdef ARM64_BOARD_CONFIG_MSM8994
+extern void msm8994_panic_reset(void);
+#endif
+
 __attribute__((noreturn))
 void
 panic_spin_forever()
 {
 	paniclog_append_noflush("\nPlease go to https://panic.apple.com to report this panic\n");
+
+#ifdef ARM64_BOARD_CONFIG_MSM8994
+	msm8994_panic_reset();
+#endif
 
 	for (;;) {
 	}
@@ -821,6 +829,9 @@ static void
 kdp_machine_reboot_type(unsigned int type)
 {
 	printf("Attempting system restart...");
+#ifdef ARM64_BOARD_CONFIG_MSM8994
+	msm8994_panic_reset();
+#endif
 	PEHaltRestart(type);
 	halt_all_cpus(TRUE);
 }

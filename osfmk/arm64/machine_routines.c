@@ -713,24 +713,33 @@ ml_get_machine_mem(void)
 	return machine_info.memory_size;
 }
 
+#ifdef ARM64_BOARD_CONFIG_MSM8994
+void msm8994_panic_reset(void);
+void
+msm8994_panic_reset(void)
+{
+	DTEntry uart_entry;
+	if (DTFindEntry("name", "uart0", &uart_entry) != kSuccess) {
+		printf("Resetting via MSM8994 PS_HOLD...\n");
+		volatile uint32_t *ps_hold = (volatile uint32_t *)ml_io_map(0xfc4ab000, 0x1000);
+		if (ps_hold) {
+			*ps_hold = 0;
+			for (;;) { ; }
+		}
+	}
+}
+#endif
+
 __attribute__((noreturn))
 void
 halt_all_cpus(boolean_t reboot)
 {
 	if (reboot) {
 		printf("MACH Reboot\n");
-		PEHaltRestart(kPERestartCPU);
 #ifdef ARM64_BOARD_CONFIG_MSM8994
-		DTEntry uart_entry;
-		if (DTFindEntry("name", "uart0", &uart_entry) != kSuccess) {
-			printf("Resetting via MSM8994 PS_HOLD...\n");
-			volatile uint32_t *ps_hold = (volatile uint32_t *)ml_io_map(0xfc4ab000, 0x1000);
-			if (ps_hold) {
-				*ps_hold = 0;
-				for (;;) { ; }
-			}
-		}
+		msm8994_panic_reset();
 #endif
+		PEHaltRestart(kPERestartCPU);
 	} else {
 		printf("CPU halted\n");
 		PEHaltRestart(kPEHaltCPU);

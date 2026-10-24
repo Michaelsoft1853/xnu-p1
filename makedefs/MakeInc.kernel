@@ -87,7 +87,7 @@ ifeq ($(DO_CTFMERGE),1)
 	$(_v)$(FIND) $(TARGET)/ -name \*.ctf -size +0 |		\
 		$(XARGS) $(CTFMERGE) -l xnu -o $@ -Z $@.ctfdata || true
 endif
-	$(_v)if [ -s $@.ctfdata ]; then								\
+	$(_v)if [ -n "$(CTFINSERT)" ] && [ -s $@.ctfdata ]; then								\
 		echo "$(ColorH)CTFINSERT$(Color0)  $(ColorLF)$(@F)$(Color0)";					\
 		$(CTFINSERT) $@	$(ARCH_FLAGS_$(CURRENT_ARCH_CONFIG))				\
 			     $@.ctfdata -o $@;							\
