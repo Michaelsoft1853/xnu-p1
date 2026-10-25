@@ -125,15 +125,10 @@ pe_identify_machine(boot_args * bootArgs)
 
 			/* Find the time base frequency first. */
 			if (DTGetProperty(cpu, "timebase-frequency", (void **)&value, &size) == kSuccess) {
-				/*
-				 * timebase_frequency_hz is only 32 bits, and
-				 * the device tree should never provide 64
-				 * bits so this if should never be taken.
-				 */
 				if (size == 8) {
 					gPEClockFrequencyInfo.timebase_frequency_hz = *(unsigned long long *)value;
 				} else {
-					gPEClockFrequencyInfo.timebase_frequency_hz = *value;
+					gPEClockFrequencyInfo.timebase_frequency_hz = *(uint32_t *)value;
 				}
 			}
 			gPEClockFrequencyInfo.dec_clock_rate_hz = gPEClockFrequencyInfo.timebase_frequency_hz;
@@ -143,7 +138,7 @@ pe_identify_machine(boot_args * bootArgs)
 				if (size == 8) {
 					gPEClockFrequencyInfo.bus_frequency_hz = *(unsigned long long *)value;
 				} else {
-					gPEClockFrequencyInfo.bus_frequency_hz = *value;
+					gPEClockFrequencyInfo.bus_frequency_hz = *(uint32_t *)value;
 				}
 			}
 			gPEClockFrequencyInfo.bus_frequency_min_hz = gPEClockFrequencyInfo.bus_frequency_hz;
@@ -160,7 +155,7 @@ pe_identify_machine(boot_args * bootArgs)
 				if (size == 8) {
 					gPEClockFrequencyInfo.mem_frequency_hz = *(unsigned long long *)value;
 				} else {
-					gPEClockFrequencyInfo.mem_frequency_hz = *value;
+					gPEClockFrequencyInfo.mem_frequency_hz = *(uint32_t *)value;
 				}
 			}
 			gPEClockFrequencyInfo.mem_frequency_min_hz = gPEClockFrequencyInfo.mem_frequency_hz;
@@ -171,7 +166,7 @@ pe_identify_machine(boot_args * bootArgs)
 				if (size == 8) {
 					gPEClockFrequencyInfo.prf_frequency_hz = *(unsigned long long *)value;
 				} else {
-					gPEClockFrequencyInfo.prf_frequency_hz = *value;
+					gPEClockFrequencyInfo.prf_frequency_hz = *(uint32_t *)value;
 				}
 			}
 			gPEClockFrequencyInfo.prf_frequency_min_hz = gPEClockFrequencyInfo.prf_frequency_hz;
@@ -182,7 +177,7 @@ pe_identify_machine(boot_args * bootArgs)
 				if (size == 8) {
 					gPEClockFrequencyInfo.fix_frequency_hz = *(unsigned long long *)value;
 				} else {
-					gPEClockFrequencyInfo.fix_frequency_hz = *value;
+					gPEClockFrequencyInfo.fix_frequency_hz = *(uint32_t *)value;
 				}
 			}
 			/* Find the cpu frequency last. */
@@ -190,7 +185,7 @@ pe_identify_machine(boot_args * bootArgs)
 				if (size == 8) {
 					gPEClockFrequencyInfo.cpu_frequency_hz = *(unsigned long long *)value;
 				} else {
-					gPEClockFrequencyInfo.cpu_frequency_hz = *value;
+					gPEClockFrequencyInfo.cpu_frequency_hz = *(uint32_t *)value;
 				}
 			}
 			gPEClockFrequencyInfo.cpu_frequency_min_hz = gPEClockFrequencyInfo.cpu_frequency_hz;
@@ -326,7 +321,36 @@ static struct tbd_ops    bcm2837_funcs = {NULL, NULL, NULL};
 #endif /* defined(ARM_BOARD_CLASS_BCM2837) */
 
 #if defined(ARM_BOARD_CLASS_MSM8994)
-static struct tbd_ops    msm8994_funcs = {NULL, NULL, NULL};
+vm_offset_t op2_gic_dist_base = 0;
+vm_offset_t op2_gic_cpu_base = 0;
+uint32_t    op2_vtimer_intid = 20;
+
+void
+op2_vtimer_set_decrementer(uint32_t dec_value)
+{
+	__asm__ volatile("msr CNTV_TVAL_EL0, %0" : : "r"((uint64_t)dec_value));
+}
+
+uint32_t
+op2_vtimer_get_decrementer(void)
+{
+	uint64_t val;
+	__asm__ volatile("mrs %0, CNTV_TVAL_EL0" : "=r"(val));
+	return (uint32_t)val;
+}
+
+void
+op2_vtimer_enable(void)
+{
+	uint64_t cntv_ctl = 1; /* ENABLE = 1, IMASK = 0 */
+	__asm__ volatile("msr CNTV_CTL_EL0, %0" : : "r"(cntv_ctl));
+}
+
+static struct tbd_ops msm8994_funcs = {
+	.tbd_fiq_handler     = NULL,
+	.tbd_get_decrementer = &op2_vtimer_get_decrementer,
+	.tbd_set_decrementer = &op2_vtimer_set_decrementer,
+};
 #endif /* defined(ARM_BOARD_CLASS_MSM8994) */
 
 vm_offset_t     gPicBase;
@@ -563,6 +587,61 @@ pe_arm_map_interrupt_controller(void)
 		return 0;
 	}
 
+	/* First, check for standard ADT /arm-io/gic */
+	if (DTLookupEntry(NULL, "/arm-io/gic", &entryP) == kSuccess) {
+		uint64_t *reg64 = NULL;
+		uint32_t *vtimer_prop = NULL;
+		uint32_t vtimer_size = 0;
+
+		kprintf("pe_arm_map_interrupt_controller: found /arm-io/gic\n");
+		if (DTGetProperty(entryP, "reg", (void **)&reg64, &prop_size) == kSuccess && prop_size >= 4 * sizeof(uint64_t)) {
+			vm_offset_t gicd_phys = soc_phys + (vm_offset_t)reg64[0];
+			vm_size_t   gicd_size = (vm_size_t)reg64[1];
+			vm_offset_t gicc_phys = soc_phys + (vm_offset_t)reg64[2];
+			vm_size_t   gicc_size = (vm_size_t)reg64[3];
+
+			uint32_t vtimer_intid = 0;
+			if (DTGetProperty(entryP, "virtual-timer-intid", (void **)&vtimer_prop, &vtimer_size) == kSuccess && vtimer_size == sizeof(uint32_t)) {
+				vtimer_intid = *vtimer_prop;
+			}
+
+			kprintf("GICv2 [ADT]: GICD PA=0x%lx (sz=0x%lx), GICC PA=0x%lx (sz=0x%lx), vtimer_intid=%u\n",
+			    (unsigned long)gicd_phys, (unsigned long)gicd_size,
+			    (unsigned long)gicc_phys, (unsigned long)gicc_size,
+			    vtimer_intid);
+
+			op2_vtimer_intid = vtimer_intid;
+			op2_gic_dist_base = ml_io_map(gicd_phys, gicd_size);
+			op2_gic_cpu_base  = ml_io_map(gicc_phys, gicc_size);
+			kprintf("GICv2 [ADT]: Mapped GICD VA=0x%lx, GICC VA=0x%lx, vtimer_intid=%u\n",
+			    (unsigned long)op2_gic_dist_base, (unsigned long)op2_gic_cpu_base, op2_vtimer_intid);
+
+			if (op2_gic_dist_base != 0) {
+				volatile uint32_t *gicd = (volatile uint32_t *)op2_gic_dist_base;
+				uint32_t gicd_ctlr  = gicd[0];           /* 0x000: GICD_CTLR */
+				uint32_t gicd_typer = gicd[1];           /* 0x004: GICD_TYPER */
+				uint32_t gicd_iidr  = gicd[2];           /* 0x008: GICD_IIDR */
+				uint32_t it_lines   = (gicd_typer & 0x1f);
+				uint32_t max_irqs   = 32 * (it_lines + 1);
+				uint32_t cpu_count  = ((gicd_typer >> 5) & 0x7) + 1;
+
+				kprintf("GICv2 [INIT]: GICD_CTLR=0x%08x, GICD_TYPER=0x%08x (max_irqs=%u, cpus=%u), GICD_IIDR=0x%08x\n",
+				    gicd_ctlr, gicd_typer, max_irqs, cpu_count, gicd_iidr);
+			}
+
+			if (op2_gic_cpu_base != 0) {
+				volatile uint32_t *gicc = (volatile uint32_t *)op2_gic_cpu_base;
+				uint32_t gicc_ctlr = gicc[0];             /* 0x000: GICC_CTLR */
+				uint32_t gicc_pmr  = gicc[1];             /* 0x004: GICC_PMR */
+				uint32_t gicc_iidr = gicc[0x0fc / 4];     /* 0x0fc: GICC_IIDR */
+				kprintf("GICv2 [INIT]: GICC_CTLR=0x%08x, GICC_PMR=0x%08x, GICC_IIDR=0x%08x\n",
+				    gicc_ctlr, gicc_pmr, gicc_iidr);
+			}
+
+			return 1;
+		}
+	}
+
 	if (DTFindEntry("interrupt-controller", "master", &entryP) == kSuccess) {
 		kprintf("pe_arm_map_interrupt_controller: found interrupt-controller\n");
 		DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size);
@@ -694,6 +773,44 @@ pe_arm_init_timer(void *args)
 #endif
 #if defined(ARM_BOARD_CLASS_MSM8994)
 	if (!strcmp(gPESoCDeviceType, "op2-io") || !strcmp(gPESoCDeviceType, "msm8994-io")) {
+		if (op2_gic_dist_base && op2_gic_cpu_base) {
+			volatile uint32_t *gicd = (volatile uint32_t *)op2_gic_dist_base;
+			volatile uint32_t *gicc = (volatile uint32_t *)op2_gic_cpu_base;
+
+			/* Ensure vtimer is Group 1 (non-secure) */
+			gicd[0x0080 / 4] |= (1U << op2_vtimer_intid);
+
+			/* Set priority to 0x80 */
+			volatile uint8_t *priority = (volatile uint8_t *)(op2_gic_dist_base + 0x0400);
+			priority[op2_vtimer_intid] = 0x80;
+
+			/* Enable vtimer interrupt in GIC distributor */
+			gicd[0x0100 / 4] = (1U << op2_vtimer_intid);
+
+			/* Enable distributor Group 0 and Group 1 */
+			gicd[0x0000 / 4] |= 3;
+
+			/* Configure CPU interface */
+			gicc[0x0004 / 4] = 0xf0; /* PMR: unmask priority 0x80 */
+			gicc[0x0008 / 4] = 0;    /* BPR: binary point 0 */
+			gicc[0x0000 / 4] = 0xf;  /* CTLR: EnableGrp0, EnableGrp1, AckCtl, FIQEn */
+
+			/* Arm and enable CNTV */
+			uint32_t init_tick = (uint32_t)(gPEClockFrequencyInfo.timebase_frequency_hz / 100); /* 10ms */
+			if (init_tick == 0) init_tick = 192000;
+			op2_vtimer_set_decrementer(init_tick);
+			op2_vtimer_enable();
+
+			uint64_t cntv_ctl_rb = 0, cntv_tval_rb = 0, cntvct_rb = 0;
+			__asm__ volatile("mrs %0, CNTV_CTL_EL0" : "=r"(cntv_ctl_rb));
+			__asm__ volatile("mrs %0, CNTV_TVAL_EL0" : "=r"(cntv_tval_rb));
+			__asm__ volatile("mrs %0, CNTVCT_EL0" : "=r"(cntvct_rb));
+
+			kprintf("GICv2 [TIMER]: Configured vtimer_intid=%u, enabled CNTV (init_tick=%u, ctl=0x%llx, tval=%lld, ct=%llu)\n",
+			    op2_vtimer_intid, init_tick, (unsigned long long)cntv_ctl_rb, (long long)cntv_tval_rb, (unsigned long long)cntvct_rb);
+			kprintf("GICv2 [TIMER]: GICD_ISENABLER0=0x%08x, GICD_ISPENDR0=0x%08x, GICC_CTLR=0x%08x, GICC_PMR=0x%08x\n",
+			    gicd[0x0100 / 4], gicd[0x0200 / 4], gicc[0x0000 / 4], gicc[0x0004 / 4]);
+		}
 		tbd_funcs = &msm8994_funcs;
 	} else
 #endif

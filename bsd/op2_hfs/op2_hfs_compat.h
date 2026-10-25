@@ -25,8 +25,10 @@ typedef struct arm_saved_state arm_saved_state_t;
 #include "core/kext-config.h"
 #include <IOKit/IOLib.h>
 
+void *IOMallocZero(vm_size_t size);
+
 #ifndef IOMallocType
-#define IOMallocType(type) IOMalloc(sizeof(type))
+#define IOMallocType(type) IOMallocZero(sizeof(type))
 #endif
 
 #ifndef IOFreeType

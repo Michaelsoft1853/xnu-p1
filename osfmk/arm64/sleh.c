@@ -32,6 +32,7 @@
 #include <arm/misc_protos.h>
 #include <arm/thread.h>
 #include <arm/rtclock.h>
+#include <arm/machine_cpu.h>
 #include <arm/trap.h> /* for IS_ARM_GDB_TRAP() et al */
 #include <arm64/proc_reg.h>
 #include <arm64/machine_machdep.h>
@@ -1383,6 +1384,101 @@ sleh_irq(arm_saved_state_t *state)
 	int preemption_level = get_preemption_level();
 #endif
 
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	if (op2_gic_cpu_base != 0) {
+		volatile uint32_t *gicc = (volatile uint32_t *)op2_gic_cpu_base;
+		uint32_t iar = gicc[0x000c / 4]; // GICC_IAR
+		bool is_aiar = false;
+		if ((iar & 0x3ff) == 1022) {
+			iar = gicc[0x0020 / 4]; // GICC_AIAR (Aliased IAR for Group 0 in NS view)
+			is_aiar = true;
+		}
+		uint32_t intid = iar & 0x3ff;
+
+		static int op2_irq_dbg = 0;
+		if (op2_irq_dbg++ < 20) {
+			kprintf("[sleh_irq: iar=0x%x intid=%u vtimer=%u aiar=%d]\n", iar, intid, op2_vtimer_intid, (int)is_aiar);
+		}
+
+		if (intid >= 1020 && intid <= 1023) {
+			return; // Spurious interrupt
+		}
+
+		if (intid == op2_vtimer_intid) {
+			sleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_TIMER);
+			cdp->cpu_decrementer = -1; // Large
+
+			static uint64_t op2_timer_ticks = 0;
+			op2_timer_ticks++;
+			if (op2_timer_ticks <= 10 || (op2_timer_ticks % 100) == 0) {
+				kprintf("timer tick: %llu\n", (unsigned long long)op2_timer_ticks);
+			}
+
+			rtclock_intr(TRUE);
+
+			/*
+			 * If CNTV_TVAL is not re-armed to a positive value by rtclock_intr,
+			 * re-arm to fallback interval (10ms) so the level interrupt clears.
+			 */
+			int64_t tval = 0;
+			__asm__ volatile("mrs %0, CNTV_TVAL_EL0" : "=r"(tval));
+			if ((int32_t)tval <= 0) {
+				uint32_t fallback = (uint32_t)(gPEClockFrequencyInfo.timebase_frequency_hz / 100);
+				if (fallback == 0) fallback = 192000;
+				__asm__ volatile("msr CNTV_TVAL_EL0, %0" : : "r"((uint64_t)fallback));
+			}
+
+			sleh_interrupt_handler_epilogue();
+			if (is_aiar) {
+				gicc[0x0024 / 4] = iar; // GICC_AEOIR
+			} else {
+				gicc[0x0010 / 4] = iar; // GICC_EOIR
+			}
+		} else if (intid < 16) {
+			sleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_IPI);
+			if (is_aiar) {
+				gicc[0x0024 / 4] = iar; // GICC_AEOIR
+			} else {
+				gicc[0x0010 / 4] = iar; // GICC_EOIR
+			}
+			__builtin_arm_isb(ISB_SY);
+			cpu_signal_handler();
+			sleh_interrupt_handler_epilogue();
+		} else {
+			sleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_OTHER);
+			if (cdp->interrupt_handler) {
+				cdp->interrupt_handler(cdp->interrupt_target,
+				    cdp->interrupt_refCon,
+				    cdp->interrupt_nub,
+				    intid);
+			}
+			sleh_interrupt_handler_epilogue();
+			if (is_aiar) {
+				gicc[0x0024 / 4] = iar; // GICC_AEOIR
+			} else {
+				gicc[0x0010 / 4] = iar; // GICC_EOIR
+			}
+		}
+
+		/* We use interrupt timing as an entropy source. */
+		timestamp = ml_get_timebase();
+		old_entropy_data_ptr = EntropyData.index_ptr;
+		new_entropy_data_ptr = old_entropy_data_ptr + 1;
+		if (new_entropy_data_ptr >= &EntropyData.buffer[ENTROPY_BUFFER_SIZE]) {
+			new_entropy_data_ptr = EntropyData.buffer;
+		}
+		EntropyData.index_ptr = new_entropy_data_ptr;
+		old_entropy_data = *old_entropy_data_ptr;
+		*old_entropy_data_ptr = (uint32_t)timestamp ^ __ror(old_entropy_data, 9);
+#if DEVELOPMENT || DEBUG
+		if (preemption_level != get_preemption_level()) {
+			panic("irq handler intid %u changed preemption level from %d to %d", intid, preemption_level, get_preemption_level());
+		}
+#endif
+		return;
+	}
+#endif
+
 	sleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_OTHER);
 
 	/* Run the registered interrupt handler. */
@@ -1444,6 +1540,11 @@ sleh_fiq(arm_saved_state_t *state)
 	}
 
 	sleh_interrupt_handler_prologue(state, type);
+
+	static int op2_fiq_dbg = 0;
+	if (op2_fiq_dbg++ < 10) {
+		kprintf("[sleh_fiq: type=%u]\n", type);
+	}
 
 #if MONOTONIC_FIQ
 	if (type == DBG_INTR_TYPE_PMI) {

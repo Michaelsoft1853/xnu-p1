@@ -39,6 +39,25 @@
 #define RAMOOPS_CONSOLE_PADDR		0xac0be000
 #define RAMOOPS_CONSOLE_SIZE		0x40000		/* 256 KiB */
 
+#include <stdint.h>
+#include <mach/vm_types.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+extern vm_offset_t op2_gic_dist_base;
+extern vm_offset_t op2_gic_cpu_base;
+extern uint32_t    op2_vtimer_intid;
+
+void op2_vtimer_set_decrementer(uint32_t dec_value);
+uint32_t op2_vtimer_get_decrementer(void);
+void op2_vtimer_enable(void);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif /* ! ASSEMBLER */
 
 #endif /* ! _PEXPERT_ARM_MSM8994_H */

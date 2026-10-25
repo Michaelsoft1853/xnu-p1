@@ -8,6 +8,7 @@
 #include <IOKit/IOPlatformExpert.h>
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOLib.h>
+#include "OP2InterruptController.h"
 extern "C" {
 #include <prng/random.h>
 void ml_init_max_cpus(unsigned int max_cpus);
@@ -33,10 +34,22 @@ OP2PlatformExpert::start(IOService *provider)
 	IOLog("OP2: starting device-tree platform expert\n");
 	op2_prng_bootstrap();
 	ml_init_max_cpus(1);
+
 	if (!IODTPlatformExpert::start(provider)) {
 		IOLog("OP2: IODTPlatformExpert::start failed\n");
 		return false;
 	}
+
+	OP2InterruptController *intc = new OP2InterruptController;
+	if (intc) {
+		if (intc->init()) {
+			intc->attach(this);
+			intc->start(this);
+		} else {
+			intc->release();
+		}
+	}
+
 	publishResource("IORTC", kOSBooleanTrue);
 	registerService();
 	IOLog("OP2: platform expert registered successfully\n");
