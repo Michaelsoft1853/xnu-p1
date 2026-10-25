@@ -724,6 +724,11 @@ bsd_init(void)
 	bsd_init_kprintf("calling vfsinit\n");
 	vfsinit();
 
+#if defined(OP2_HFS) && OP2_HFS
+	extern void op2_hfs_register(void);
+	op2_hfs_register();
+#endif
+
 #if CONFIG_PROC_UUID_POLICY
 	/* Initial proc_uuid_policy subsystem */
 	bsd_init_kprintf("calling proc_uuid_policy_init()\n");

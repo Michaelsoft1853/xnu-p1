@@ -50,6 +50,14 @@ OP2_PTHREAD_INC = -I$(OP2_PTHREAD_ROOT) -I$(OP2_PTHREAD_ROOT)/private -I$(OP2_PT
 op2_pthread_init.o_INCFLAGS = $(OP2_PTHREAD_INC) 
 op2_pthread_support.o_INCFLAGS = $(OP2_PTHREAD_INC) 
 op2_pthread_synch.o_INCFLAGS = $(OP2_PTHREAD_INC) 
+
+# Apple OSS HFS built in (bsd/op2_hfs): compiled like the kext, see op2_hfs_compat.h.
+OP2_HFS_ROOT = $(SRCROOT)/bsd/op2_hfs
+OP2_HFS_OBJS = BTree.o BTreeAllocate.o BTreeMiscOps.o BTreeNodeOps.o BTreeNodeReserve.o BTreeScanner.o BTreeTreeOps.o BTreeWrapper.o CatalogUtilities.o FileExtentMapping.o FileIDsServices.o MacOSStubs.o UnicodeWrappers.o VolumeAllocation.o hfs_attrlist.o hfs_btreeio.o hfs_catalog.o hfs_chash.o hfs_cnode.o hfs_cprotect.o hfs_endian.o hfs_extents.o hfs_fsinfo.o hfs_hotfiles.o hfs_journal.o hfs_link.o hfs_lookup.o hfs_notification.o hfs_quota.o hfs_readwrite.o hfs_resize.o hfs_search.o hfs_vfsops.o hfs_vfsutils.o hfs_vnops.o hfs_xattr.o rangelist.o hfs_encodinghint.o hfs_encodings.o op2_hfs_iokit.o
+$(foreach o,$(OP2_HFS_OBJS),$(eval $(o)_CFLAGS_ADD += -include $(OP2_HFS_ROOT)/op2_hfs_compat.h -I$(OP2_HFS_ROOT) -I$(OP2_HFS_ROOT)/core -Wno-error -Wno-cast-align -Wno-strict-prototypes ))
+# HFSEncodings is a separate kext on Apple with its own allocation counter.
+hfs_encodings.o_CFLAGS_ADD += -Dhfs_allocated=hfs_encodings_allocated
+hfs_encodinghint.o_CFLAGS_ADD += -Dhfs_allocated=hfs_encodings_allocated
 endif
 
 #

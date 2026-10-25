@@ -612,7 +612,7 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 	}
 
 #if defined(ARM64_BOARD_CONFIG_MSM8994)
-	panic("Milestone 3 SUCCESS: Reached IOFindBSDRoot (waiting for root device)");
+	panic("IOFindBSDRoot: no root device matched (ramdisk missing or failed)");
 #endif
 
 	do {

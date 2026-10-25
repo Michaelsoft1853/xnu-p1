@@ -1532,9 +1532,18 @@ thread_syscall_return(kern_return_t error)
 
 void
 syscall_trace(
-	struct arm_saved_state * regs __unused)
+	struct arm_saved_state * regs)
 {
-	/* kprintf("syscall: %d\n", saved_state64(regs)->x[16]);  */
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	static int trace_syscalls = -1;
+	if (__improbable(trace_syscalls == -1)) {
+		trace_syscalls = 0;
+		PE_parse_boot_argn("trace_syscalls", &trace_syscalls, sizeof(trace_syscalls));
+	}
+	if (__improbable(trace_syscalls)) {
+		kprintf("PID 1 syscall: %lld\n", (long long)saved_state64(regs)->x[16]);
+	}
+#endif
 }
 
 static void

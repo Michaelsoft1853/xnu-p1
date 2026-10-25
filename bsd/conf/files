@@ -386,6 +386,48 @@ bsd/pthread/pthread_shims.c		standard
 bsd/pthread/op2_pthread_init.c	standard
 bsd/pthread/op2_pthread_support.c	standard
 bsd/pthread/op2_pthread_synch.c	standard
+
+# Apple OSS hfs-627.100.6, staged by tools/stage-hfs.sh
+bsd/op2_hfs/core/BTree.c		optional op2_hfs
+bsd/op2_hfs/core/BTreeAllocate.c		optional op2_hfs
+bsd/op2_hfs/core/BTreeMiscOps.c		optional op2_hfs
+bsd/op2_hfs/core/BTreeNodeOps.c		optional op2_hfs
+bsd/op2_hfs/core/BTreeNodeReserve.c		optional op2_hfs
+bsd/op2_hfs/core/BTreeScanner.c		optional op2_hfs
+bsd/op2_hfs/core/BTreeTreeOps.c		optional op2_hfs
+bsd/op2_hfs/core/BTreeWrapper.c		optional op2_hfs
+bsd/op2_hfs/core/CatalogUtilities.c		optional op2_hfs
+bsd/op2_hfs/core/FileExtentMapping.c		optional op2_hfs
+bsd/op2_hfs/core/FileIDsServices.c		optional op2_hfs
+bsd/op2_hfs/core/MacOSStubs.c		optional op2_hfs
+bsd/op2_hfs/core/UnicodeWrappers.c		optional op2_hfs
+bsd/op2_hfs/core/VolumeAllocation.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_attrlist.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_btreeio.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_catalog.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_chash.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_cnode.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_cprotect.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_endian.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_extents.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_fsinfo.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_hotfiles.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_journal.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_link.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_lookup.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_notification.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_quota.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_readwrite.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_resize.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_search.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_vfsops.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_vfsutils.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_vnops.c		optional op2_hfs
+bsd/op2_hfs/core/hfs_xattr.c		optional op2_hfs
+bsd/op2_hfs/core/rangelist.c		optional op2_hfs
+bsd/op2_hfs/hfs_encodings/hfs_encodinghint.c		optional op2_hfs
+bsd/op2_hfs/hfs_encodings/hfs_encodings.c		optional op2_hfs
+bsd/op2_hfs/op2_hfs_iokit.c		optional op2_hfs
 bsd/pthread/pthread_priority.c		standard
 bsd/pthread/pthread_workqueue.c		standard
 
