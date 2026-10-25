@@ -37,6 +37,9 @@
 void
 SHA256_Init(SHA256_CTX *ctx)
 {
+	if (!g_crypto_funcs || !g_crypto_funcs->ccsha256_di) {
+		return;
+	}
 	const struct ccdigest_info *di;
 	di = g_crypto_funcs->ccsha256_di;
 
@@ -51,6 +54,9 @@ SHA256_Init(SHA256_CTX *ctx)
 void
 SHA256_Update(SHA256_CTX *ctx, const void *data, size_t len)
 {
+	if (!g_crypto_funcs || !g_crypto_funcs->ccsha256_di) {
+		return;
+	}
 	const struct ccdigest_info *di;
 	di = g_crypto_funcs->ccsha256_di;
 
@@ -60,6 +66,9 @@ SHA256_Update(SHA256_CTX *ctx, const void *data, size_t len)
 void
 SHA256_Final(void *digest, SHA256_CTX *ctx)
 {
+	if (!g_crypto_funcs || !g_crypto_funcs->ccsha256_di) {
+		return;
+	}
 	const struct ccdigest_info *di;
 	di = g_crypto_funcs->ccsha256_di;
 

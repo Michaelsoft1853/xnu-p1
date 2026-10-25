@@ -302,6 +302,7 @@ PE_init_iokit(void)
 	}
 
 	StartIOKit(PE_state.deviceTreeHead, PE_state.bootArgs, (void *) 0, (void *) 0);
+	kprintf("PE_init_iokit: StartIOKit returned\n");
 }
 
 void

@@ -231,14 +231,14 @@ int log_leaks = 0;
 static inline void
 kernel_bootstrap_log(const char *message)
 {
-//	kprintf("kernel_bootstrap: %s\n", message);
+	kprintf("kernel_bootstrap: %s\n", message);
 	kernel_debug_string_early(message);
 }
 
 static inline void
 kernel_bootstrap_thread_log(const char *message)
 {
-//	kprintf("kernel_bootstrap_thread: %s\n", message);
+	kprintf("kernel_bootstrap_thread: %s\n", message);
 	kernel_debug_string_early(message);
 }
 
@@ -592,6 +592,7 @@ kernel_bootstrap_thread(void)
 #ifdef  IOKIT
 	kernel_bootstrap_log("PE_init_iokit");
 	PE_init_iokit();
+	kprintf("kernel_bootstrap: after PE_init_iokit\n");
 #endif
 
 	assert(ml_get_interrupts_enabled() == FALSE);
@@ -607,6 +608,7 @@ kernel_bootstrap_thread(void)
 	ml_spin_debug_clear_self();
 #endif
 	(void) spllo();         /* Allow interruptions */
+	kprintf("kernel_bootstrap: after spllo\n");
 
 #if (defined(__i386__) || defined(__x86_64__)) && NCOPY_WINDOWS > 0
 	/*
@@ -622,9 +624,13 @@ kernel_bootstrap_thread(void)
 	/*
 	 *	Initialize the shared region module.
 	 */
+	kprintf("kernel_bootstrap: calling vm_shared_region_init\n");
 	vm_shared_region_init();
+	kprintf("kernel_bootstrap: calling vm_commpage_init\n");
 	vm_commpage_init();
+	kprintf("kernel_bootstrap: calling vm_commpage_text_init\n");
 	vm_commpage_text_init();
+	kprintf("kernel_bootstrap: after commpage\n");
 
 #if CONFIG_MACF
 	kernel_bootstrap_log("mac_policy_initmach");

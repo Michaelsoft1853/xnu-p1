@@ -43,6 +43,15 @@ CFLAGS+= -include meta_features.h -DDRIVER_PRIVATE \
 	-DBSD_KERNEL_PRIVATE -DLP64_DEBUG=0
 SFLAGS+= -include meta_features.h
 
+# This provider is built into MSM8994; other boards use their normal kext.
+ifeq ($(CURRENT_MACHINE_CONFIG),MSM8994)
+OP2_PTHREAD_ROOT = $(SRCROOT)/bsd/pthread/op2_libpthread
+OP2_PTHREAD_INC = -I$(OP2_PTHREAD_ROOT) -I$(OP2_PTHREAD_ROOT)/private -I$(OP2_PTHREAD_ROOT)/sys 
+op2_pthread_init.o_INCFLAGS = $(OP2_PTHREAD_INC) 
+op2_pthread_support.o_INCFLAGS = $(OP2_PTHREAD_INC) 
+op2_pthread_synch.o_INCFLAGS = $(OP2_PTHREAD_INC) 
+endif
+
 #
 # Directories for mig generated files
 #

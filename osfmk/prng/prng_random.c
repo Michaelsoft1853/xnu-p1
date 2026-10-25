@@ -236,6 +236,83 @@ static struct {
 
 static SECURITY_READ_ONLY_LATE(prng_fns_t) prng_fns = NULL;
 
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+static struct {
+	uint8_t drbg_state[2048];
+	struct ccdrbg_info drbg_info;
+	const struct ccdrbg_nisthmac_custom drbg_custom;
+} op2_prng = {
+	.drbg_custom = {
+		.di = &ccsha256_ltc_di,
+		.strictFIPS = 0,
+	},
+};
+
+static int
+op2_prng_init(cckprng_ctx_t ctx __unused, size_t nbytes, const void * seed)
+{
+	ccdrbg_factory_nisthmac(&op2_prng.drbg_info, &op2_prng.drbg_custom);
+	assert(op2_prng.drbg_info.size <= sizeof(op2_prng.drbg_state));
+	struct ccdrbg_state *state = (struct ccdrbg_state *)op2_prng.drbg_state;
+	uint64_t nonce = ml_get_timebase();
+	const char ps[] = "xnu msm8994 kernel random";
+	int rc = ccdrbg_init(&op2_prng.drbg_info, state, nbytes, seed, sizeof(nonce), &nonce, sizeof(ps) - 1, ps);
+	if (rc != CCDRBG_STATUS_OK) {
+		panic("op2_prng_init failed: %d", rc);
+	}
+	return CCKPRNG_OK;
+}
+
+static int
+op2_prng_reseed(cckprng_ctx_t ctx __unused, size_t nbytes, const void * seed)
+{
+	struct ccdrbg_state *state = (struct ccdrbg_state *)op2_prng.drbg_state;
+	int rc = ccdrbg_reseed(&op2_prng.drbg_info, state, nbytes, seed, 0, NULL);
+	if (rc != CCDRBG_STATUS_OK) {
+		panic("op2_prng_reseed failed: %d", rc);
+	}
+	return CCKPRNG_OK;
+}
+
+static int
+op2_prng_addentropy(cckprng_ctx_t ctx, size_t nbytes, const void * entropy)
+{
+	return op2_prng_reseed(ctx, nbytes, entropy);
+}
+
+static int
+op2_prng_generate(cckprng_ctx_t ctx __unused, size_t nbytes, void * out)
+{
+	struct ccdrbg_state *state = (struct ccdrbg_state *)op2_prng.drbg_state;
+	int rc = ccdrbg_generate(&op2_prng.drbg_info, state, nbytes, out, 0, NULL);
+	if (rc == CCDRBG_STATUS_OK) {
+		return CCKPRNG_OK;
+	}
+	if (rc == CCDRBG_STATUS_NEED_RESEED) {
+		return CCKPRNG_NEED_ENTROPY;
+	}
+	panic("op2_prng_generate failed: %d", rc);
+	return CCKPRNG_ABORT;
+}
+
+static const struct prng_fns op2_prng_fns = {
+	.init = op2_prng_init,
+	.reseed = op2_prng_reseed,
+	.addentropy = op2_prng_addentropy,
+	.generate = op2_prng_generate,
+};
+
+void
+op2_prng_bootstrap(void)
+{
+	if (prng_fns == NULL) {
+		(void)early_random();
+		register_and_init_prng(&op2_prng_fns);
+		kprintf("OP2: PRNG registered with built-in HMAC-SHA256 DRBG\n");
+	}
+}
+#endif
+
 static int
 prng_init(cckprng_ctx_t ctx, size_t nbytes, const void * seed)
 {
@@ -567,6 +644,12 @@ void
 read_random(void * buffer, u_int numbytes)
 {
 	int err;
+
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	if (__improbable(prng.lock.mutex == NULL)) {
+		op2_prng_bootstrap();
+	}
+#endif
 
 	lck_mtx_lock(prng.lock.mutex);
 

@@ -449,7 +449,7 @@ bsd_init(void)
 	boolean_t       netboot = FALSE;
 #endif
 
-#define bsd_init_kprintf(x...) /* kprintf("bsd_init: " x) */
+#define bsd_init_kprintf(x...) kprintf("bsd_init: " x)
 
 	throttle_init();
 
@@ -845,7 +845,7 @@ bsd_init(void)
 #endif
 
 	bsd_init_kprintf("calling sysctl_mib_init\n");
-	sysctl_mib_init()
+	sysctl_mib_init();
 
 	bsd_init_kprintf("calling bsd_autoconf\n");
 	bsd_autoconf();

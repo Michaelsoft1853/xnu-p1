@@ -313,6 +313,12 @@ psynch_wait_wakeup(uintptr_t kwq, struct ksyn_waitq_element *kwe,
 void
 pthread_init(void)
 {
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	if (!pthread_functions) {
+		extern void op2_pthread_register(void);
+		op2_pthread_register();
+	}
+#endif
 	if (!pthread_functions) {
 		panic("pthread kernel extension not loaded (function table is NULL).");
 	}

@@ -298,7 +298,7 @@ S_RULE_2=
 # Compilation rules to generate .o from .c for normal files
 #
 C_RULE_0=@echo "$(ColorC)CC$(Color0)  $(ColorF)$@$(Color0)"
-C_RULE_1A=$(_v)${KCC} -c ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CWARNFLAGS}} -MD -MF $(@:o=d) -MP ${$@_CFLAGS_ADD} ${$@_CWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS}
+C_RULE_1A=$(_v)${KCC} -c ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CWARNFLAGS}} -MD -MF $(@:o=d) -MP ${$@_CFLAGS_ADD} ${$@_CWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS} 
 C_RULE_1B=$(<F)
 ifeq ($(BUILD_MACHO_OBJ),0)
 C_RULE_2=
@@ -313,7 +313,7 @@ else
 C_RULE_2=
 endif
 ifeq ($(DO_CTFMACHO), 1)
-C_CTFRULE_1A=$(_v)${KCC} -o $@.non_lto -c ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CWARNFLAGS}} ${$@_CFLAGS_ADD} ${$@_CWARNFLAGS_ADD} ${INCFLAGS} $(CFLAGS_NOLTO_FLAG) ${$@_INCFLAGS}
+C_CTFRULE_1A=$(_v)${KCC} -o $@.non_lto -c ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CWARNFLAGS}} ${$@_CFLAGS_ADD} ${$@_CWARNFLAGS_ADD} ${INCFLAGS} $(CFLAGS_NOLTO_FLAG) ${$@_INCFLAGS} 
 C_CTFRULE_1B=$(<F)
 C_CTFRULE_2=$(_v)if [ -z "${$@_SKIP_CTFCONVERT}" ]; then \
                      ctferr=`${CTFCONVERT} -l xnu -v -o $@.non_lto.ctf $@.non_lto 2>&1 > /dev/null || true`; \

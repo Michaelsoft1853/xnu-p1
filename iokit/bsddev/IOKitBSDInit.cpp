@@ -430,11 +430,15 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 	assert(matching);
 	matching->setObject(gIOResourceMatchedKey, gIOBSDKey);
 
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	IOLog("!BSD\n");
+#else
 	if ((service = IOService::waitForMatchingService(matching, 30ULL * kSecondScale))) {
 		service->release();
 	} else {
 		IOLog("!BSD\n");
 	}
+#endif
 	matching->release();
 	matching = NULL;
 
@@ -606,6 +610,10 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 			s->release();
 		}
 	}
+
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	panic("Milestone 3 SUCCESS: Reached IOFindBSDRoot (waiting for root device)");
+#endif
 
 	do {
 		t.tv_sec = ROOTDEVICETIMEOUT;

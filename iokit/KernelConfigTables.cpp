@@ -34,6 +34,14 @@
 
 const char * gIOKernelConfigTables =
     "("
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+    "   {"
+    "     'IOClass'         = OP2PlatformExpert;"
+    "     'IOProviderClass' = IOPlatformExpertDevice;"
+    "     'IONameMatch'     = 'N56AP';"
+    "     'IOProbeScore'    = 10000:32;"
+    "   },"
+#endif
     "   {"
     "     'IOClass'         = IOPanicPlatform;"
     "     'IOProviderClass' = IOPlatformExpertDevice;"

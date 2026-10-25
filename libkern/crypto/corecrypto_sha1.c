@@ -40,6 +40,9 @@ SHA1ToDi(const struct ccdigest_info *di, SHA1_CTX *sha1_ctx, struct ccdigest_ctx
 void
 SHA1Init(SHA1_CTX *ctx)
 {
+	if (!g_crypto_funcs || !g_crypto_funcs->ccsha1_di) {
+		return;
+	}
 	const struct ccdigest_info *di = g_crypto_funcs->ccsha1_di;
 	ccdigest_di_decl(di, di_ctx);
 
@@ -51,6 +54,9 @@ SHA1Init(SHA1_CTX *ctx)
 void
 SHA1Update(SHA1_CTX *ctx, const void *data, size_t len)
 {
+	if (!g_crypto_funcs || !g_crypto_funcs->ccsha1_di) {
+		return;
+	}
 	const struct ccdigest_info *di = g_crypto_funcs->ccsha1_di;
 	ccdigest_di_decl(di, di_ctx);
 
@@ -62,6 +68,9 @@ SHA1Update(SHA1_CTX *ctx, const void *data, size_t len)
 void
 SHA1Final(void *digest, SHA1_CTX *ctx)
 {
+	if (!g_crypto_funcs || !g_crypto_funcs->ccsha1_di) {
+		return;
+	}
 	const struct ccdigest_info *di = g_crypto_funcs->ccsha1_di;
 	ccdigest_di_decl(di, di_ctx);
 

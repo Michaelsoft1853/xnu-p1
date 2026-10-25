@@ -35,6 +35,9 @@
 aes_rval
 aes_encrypt_key(const unsigned char *key, int key_len, aes_encrypt_ctx cx[1])
 {
+	if (!g_crypto_funcs || !g_crypto_funcs->ccaes_cbc_encrypt) {
+		return aes_error;
+	}
 	const struct ccmode_cbc *cbc = g_crypto_funcs->ccaes_cbc_encrypt;
 
 	/* Make sure the context size for the mode fits in the one we have */
@@ -51,6 +54,9 @@ aes_rval
 aes_encrypt_cbc(const unsigned char *in_blk, const unsigned char *in_iv, unsigned int num_blk,
     unsigned char *out_blk, aes_encrypt_ctx cx[1])
 {
+	if (!g_crypto_funcs || !g_crypto_funcs->ccaes_cbc_encrypt) {
+		return aes_error;
+	}
 	const struct ccmode_cbc *cbc = g_crypto_funcs->ccaes_cbc_encrypt;
 	cccbc_iv_decl(cbc->block_size, ctx_iv);
 
@@ -72,6 +78,9 @@ aes_encrypt(const unsigned char *in_blk, unsigned char *out_blk, aes_encrypt_ctx
 aes_rval
 aes_decrypt_key(const unsigned char *key, int key_len, aes_decrypt_ctx cx[1])
 {
+	if (!g_crypto_funcs || !g_crypto_funcs->ccaes_cbc_decrypt) {
+		return aes_error;
+	}
 	const struct ccmode_cbc *cbc = g_crypto_funcs->ccaes_cbc_decrypt;
 
 	/* Make sure the context size for the mode fits in the one we have */
@@ -88,6 +97,9 @@ aes_rval
 aes_decrypt_cbc(const unsigned char *in_blk, const unsigned char *in_iv, unsigned int num_blk,
     unsigned char *out_blk, aes_decrypt_ctx cx[1])
 {
+	if (!g_crypto_funcs || !g_crypto_funcs->ccaes_cbc_decrypt) {
+		return aes_error;
+	}
 	const struct ccmode_cbc *cbc = g_crypto_funcs->ccaes_cbc_decrypt;
 	cccbc_iv_decl(cbc->block_size, ctx_iv);
 

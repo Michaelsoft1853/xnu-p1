@@ -78,12 +78,16 @@ commpage_populate(
 	uint16_t        c2;
 	int cpufamily;
 
+	kprintf("commpage_populate: start\n");
 	sharedpage_rw_addr = pmap_create_sharedpage();
+	kprintf("commpage_populate: after pmap_create_sharedpage, sharedpage_rw_addr=%p\n", (void *)sharedpage_rw_addr);
 	commPagePtr = (vm_address_t)_COMM_PAGE_BASE_ADDRESS;
 
 	*((uint16_t*)(_COMM_PAGE_VERSION + _COMM_PAGE_RW_OFFSET)) = (uint16_t) _COMM_PAGE_THIS_VERSION;
+	kprintf("commpage_populate: after version write\n");
 
 	commpage_init_cpu_capabilities();
+	kprintf("commpage_populate: after init_cpu_capabilities\n");
 	commpage_set_timestamp(0, 0, 0, 0, 0);
 
 	if (_cpu_capabilities & kCache32) {
@@ -151,6 +155,7 @@ commpage_populate(
 
 
 	*((uint64_t*)(_COMM_PAGE_REMOTETIME_PARAMS + _COMM_PAGE_RW_OFFSET)) = BT_RESET_SENTINEL_TS;
+	kprintf("commpage_populate: completed successfully\n");
 }
 
 struct mu {

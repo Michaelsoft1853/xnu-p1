@@ -100,6 +100,9 @@ typedef const struct prng_fns {
 } * prng_fns_t;
 
 void register_and_init_prng(prng_fns_t fns);
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+void op2_prng_bootstrap(void);
+#endif
 
 #include <kern/simple_lock.h>
 /* Definitions for boolean PRNG */
