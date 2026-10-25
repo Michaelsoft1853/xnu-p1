@@ -957,6 +957,9 @@ bsd_init(void)
 #endif
 		printf("cannot mount root, errno = %d\n", err);
 		boothowto |= RB_ASKNAME;
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+		panic("bsd_init: vfs_mountroot failed (errno = %d); bounded halt for reset", err);
+#endif
 	}
 
 	IOSecureBSDRoot(rootdevice);

@@ -509,6 +509,24 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 		}
 	}
 
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+//
+//	OnePlus 2 (MSM8994): root on a GPT partition of the internal eMMC 5.0 (bsd/dev/op2_emmc.c)
+//
+	if (strcmp(rdBootVar, "emmcroot0") == 0) {
+		extern int op2_emmc_rootdev(dev_t *dev);
+		OSSafeReleaseNULL(matching);
+		int emmc_err = op2_emmc_rootdev(root);
+		if (emmc_err) {
+			panic("IOFindBSDRoot: OP2 eMMC root %s unavailable: %d", rdBootVar, emmc_err);
+		}
+		strlcpy(rootName, rdBootVar, rootNameSize);
+		IOLog("BSD root: %s, major %d, minor %d\n", rootName, major(*root), minor(*root));
+		*oflags = 0;
+		goto iofrootx;
+	}
+#endif
+
 //
 //	Now check if we are trying to root on a memory device
 //
