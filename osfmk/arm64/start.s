@@ -277,6 +277,14 @@ LEXT(LowExceptionVectorBase)
 .globl EXT(bootstrap_instructions)
 LEXT(bootstrap_instructions)
 #endif /* defined(KERNEL_INTEGRITY_KTRR)*/
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	.align 2
+	.globl EXT(op2_secondary_entry)
+LEXT(op2_secondary_entry)
+	msr		DAIFSet, #0xf
+	msr		SPSel, #1
+	b		EXT(LowResetVectorBase)
+#endif
 	.align 2
 	.globl EXT(resume_idle_cpu)
 LEXT(resume_idle_cpu)
@@ -723,6 +731,12 @@ common_start:
 1:
 	MSR_VBAR_EL1_X0
 
+
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	/* Complete local TLB/I-cache invalidation before enabling the MMU. */
+	dsb		sy
+	isb
+#endif
 
 	// Enable caches and MMU
 	mov		x0, #(SCTLR_EL1_DEFAULT & 0xFFFF)

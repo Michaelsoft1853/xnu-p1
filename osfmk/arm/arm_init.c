@@ -506,6 +506,13 @@ arm_init_cpu(
 	__builtin_arm_wsr("pan", 1);
 #endif
 
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	if (cpu_data_ptr != &BootCpuData) {
+		extern void op2_secondary_cpu_init(void);
+		op2_secondary_cpu_init();
+	}
+#endif
+
 	cpu_data_ptr->cpu_flags &= ~SleepState;
 #if     __ARM_SMP__ && defined(ARMA7)
 	cpu_data_ptr->cpu_CLW_active = 1;

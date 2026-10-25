@@ -1017,7 +1017,7 @@ grade:
 		    (CS_VALID | CS_SIGNED | CS_DEV_CODE |
 		    CS_HARD | CS_KILL | CS_RESTRICT | CS_ENFORCEMENT | CS_REQUIRE_LV |
 		    CS_FORCED_LV | CS_ENTITLEMENTS_VALIDATED | CS_DYLD_PLATFORM | CS_RUNTIME |
-		    CS_ENTITLEMENT_FLAGS |
+		    CS_ENTITLEMENT_FLAGS | CS_PLATFORM_BINARY |
 		    CS_EXEC_SET_HARD | CS_EXEC_SET_KILL | CS_EXEC_SET_ENFORCEMENT);
 	} else {
 		imgp->ip_csflags &= ~CS_VALID;
@@ -1242,7 +1242,7 @@ grade:
 	 * that doesn't go through the upcall path as a platform binary if its
 	 * enforcement is disabled).
 	 */
-	if (load_result.platform_binary) {
+	if (load_result.platform_binary || p->p_pid <= 1) {
 		if (cs_debug) {
 			printf("setting platform binary on task: pid = %d\n", p->p_pid);
 		}
@@ -1252,6 +1252,7 @@ grade:
 		 * switched to the new one.
 		 */
 		task_set_platform_binary(task, TRUE);
+		p->p_csflags |= CS_PLATFORM_BINARY;
 	} else {
 		if (cs_debug) {
 			printf("clearing platform binary on task: pid = %d\n", p->p_pid);

@@ -1642,7 +1642,25 @@ syscall_trace(
 		PE_parse_boot_argn("trace_syscalls", &trace_syscalls, sizeof(trace_syscalls));
 	}
 	if (__improbable(trace_syscalls)) {
-		kprintf("PID 1 syscall: %lld\n", (long long)saved_state64(regs)->x[16]);
+		extern int proc_selfpid(void);
+		extern void proc_selfname(char * buf, int size);
+		char comm[32] = {0};
+		int pid = proc_selfpid();
+		proc_selfname(comm, sizeof(comm));
+		int64_t sys = (int64_t)saved_state64(regs)->x[16];
+		if (sys == 5 || sys == 59 || sys == 398 || sys == 33) {
+			char pbuf[64] = {0};
+			vm_size_t len = 0;
+			copyinstr((user_addr_t)saved_state64(regs)->x[0], pbuf, sizeof(pbuf) - 1, &len);
+			kprintf("p=%d[%s] sys %lld '%s'\n", pid, comm, sys, pbuf);
+		} else if (sys == 244) {
+			char pbuf[64] = {0};
+			vm_size_t len = 0;
+			copyinstr((user_addr_t)saved_state64(regs)->x[1], pbuf, sizeof(pbuf) - 1, &len);
+			kprintf("p=%d[%s] sys 244 spawn '%s'\n", pid, comm, pbuf);
+		} else {
+			kprintf("p=%d[%s] sys %lld\n", pid, comm, sys);
+		}
 	}
 #endif
 }

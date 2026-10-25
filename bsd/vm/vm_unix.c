@@ -1734,8 +1734,13 @@ _shared_region_map_and_slide(
 			p->p_pid, p->p_comm,
 			(void *)VM_KERNEL_ADDRPERM(vp),
 			vp->v_name, va.va_uid));
+#if !DEVELOPMENT && !DEBUG
 		error = EPERM;
 		goto done;
+#else
+		printf("shared_region: [%d(%s)] map('%s') owned by uid=%d (allowed for DEVELOPMENT)\n",
+		       p->p_pid, p->p_comm, vp->v_name, va.va_uid);
+#endif
 	}
 
 	if (scdir_enforce) {

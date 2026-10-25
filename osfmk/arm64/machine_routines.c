@@ -714,23 +714,41 @@ ml_get_machine_mem(void)
 }
 
 #ifdef ARM64_BOARD_CONFIG_MSM8994
+extern volatile uint32_t *op2_imem_reg;
+extern volatile uint32_t *op2_ps_hold_reg;
+extern volatile uint32_t *op2_wdt_reg;
+
 void msm8994_panic_reset(void);
 void
 msm8994_panic_reset(void)
 {
-	DTEntry uart_entry;
-	if (DTFindEntry("name", "uart0", &uart_entry) != kSuccess) {
-		printf("Resetting via MSM8994 PS_HOLD to Recovery...\n");
-		volatile uint32_t *imem = (volatile uint32_t *)ml_io_map(0xfe87f000, 0x1000);
-		if (imem) {
-			*(volatile uint32_t *)((uintptr_t)imem + 0x65c) = 0x77665502;
-		}
-		volatile uint32_t *ps_hold = (volatile uint32_t *)ml_io_map(0xfc4ab000, 0x1000);
-		if (ps_hold) {
-			*ps_hold = 0;
-			for (;;) { ; }
-		}
+	printf("OP2: initiating autonomous panic reset to recovery...\n");
+
+	if (op2_imem_reg) {
+		/* Clear download mode cookies at 0x0 and 0x4 to prevent EDL/RAM-dump mode */
+		*(volatile uint32_t *)((uintptr_t)op2_imem_reg + 0x0) = 0;
+		*(volatile uint32_t *)((uintptr_t)op2_imem_reg + 0x4) = 0;
+		/* Set restart reason to 0x77665502 (boot-recovery) at 0x65c */
+		*(volatile uint32_t *)((uintptr_t)op2_imem_reg + 0x65c) = 0x77665502;
+		__asm__ volatile("dmb sy" ::: "memory");
 	}
+
+	/* Direct MMIO write 0 to PS_HOLD (0xfc4ab000) */
+	if (op2_ps_hold_reg) {
+		*op2_ps_hold_reg = 0;
+		__asm__ volatile("dmb sy" ::: "memory");
+	}
+
+	volatile uint32_t *ps_hold = (volatile uint32_t *)ml_io_map(0xfc4ab000, 0x1000);
+	if (ps_hold) {
+		*ps_hold = 0;
+		__asm__ volatile("dmb sy" ::: "memory");
+	}
+
+	for (volatile int i = 0; i < 2000000; i++) {
+		__asm__ volatile("nop");
+	}
+	return;
 }
 #endif
 

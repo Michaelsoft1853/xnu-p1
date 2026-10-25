@@ -3,6 +3,9 @@ iokit/Families/IONVRAM/IONVRAMController.cpp				optional iokitcpp
 # Power Domains
 iokit/Kernel/IOPMrootDomain.cpp    					optional iokitcpp
 
-# MSM8994 Platform Expert & Interrupt Controller
+# MSM8994 Platform Expert, Interrupt Controller & CPU Driver
 iokit/Kernel/arm/OP2PlatformExpert.cpp				optional iokitcpp
 iokit/Kernel/arm/OP2InterruptController.cpp			optional iokitcpp
+iokit/Kernel/arm/OP2CPU.cpp					optional iokitcpp
+iokit/Kernel/arm/OP2KeyStore.cpp				optional iokitcpp
+iokit/Kernel/arm/OP2Watchdog.cpp				optional iokitcpp

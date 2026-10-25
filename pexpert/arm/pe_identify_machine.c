@@ -324,11 +324,36 @@ static struct tbd_ops    bcm2837_funcs = {NULL, NULL, NULL};
 vm_offset_t op2_gic_dist_base = 0;
 vm_offset_t op2_gic_cpu_base = 0;
 uint32_t    op2_vtimer_intid = 20;
+volatile uint32_t *op2_imem_reg = NULL;
+volatile uint32_t *op2_ps_hold_reg = NULL;
+volatile uint32_t *op2_wdt_reg = NULL;
+
+static uint64_t op2_start_cycles = 0;
+static uint32_t op2_deadline_sec = 0;
+static boolean_t op2_deadline_parsed = FALSE;
 
 void
 op2_vtimer_set_decrementer(uint32_t dec_value)
 {
 	__asm__ volatile("msr CNTV_TVAL_EL0, %0" : : "r"((uint64_t)dec_value));
+
+	if (!op2_deadline_parsed) {
+		op2_deadline_parsed = TRUE;
+		PE_parse_boot_argn("op2_deadline", &op2_deadline_sec, sizeof(op2_deadline_sec));
+		if (op2_deadline_sec > 0) {
+			__asm__ volatile("mrs %0, CNTVCT_EL0" : "=r"(op2_start_cycles));
+			kprintf("OP2: software timer deadline armed for %u seconds (start_cycle=0x%llx)\n",
+			    op2_deadline_sec, op2_start_cycles);
+		}
+	}
+	if (op2_deadline_sec > 0 && cpu_number() == 0) {
+		uint64_t now, freq;
+		__asm__ volatile("mrs %0, CNTVCT_EL0" : "=r"(now));
+		__asm__ volatile("mrs %0, CNTFRQ_EL0" : "=r"(freq));
+		if (now > op2_start_cycles && (now - op2_start_cycles) > (freq * (uint64_t)op2_deadline_sec)) {
+			panic("OP2: software timer deadline exceeded (%u s); resetting\n", op2_deadline_sec);
+		}
+	}
 }
 
 uint32_t
@@ -638,6 +663,17 @@ pe_arm_map_interrupt_controller(void)
 				    gicc_ctlr, gicc_pmr, gicc_iidr);
 			}
 
+			DTEntry uart_entry;
+			if (DTFindEntry("name", "uart0", &uart_entry) != kSuccess) {
+				op2_imem_reg = (volatile uint32_t *)ml_io_map(0xfe87f000, 0x1000);
+				op2_ps_hold_reg = (volatile uint32_t *)ml_io_map(0xfc4ab000, 0x1000);
+				op2_wdt_reg = (volatile uint32_t *)ml_io_map(0xf9017000, 0x1000);
+				kprintf("OP2: early mapped IMEM=0x%lx, PS_HOLD=0x%lx, WDT=0x%lx\n",
+				    (unsigned long)(uintptr_t)op2_imem_reg,
+				    (unsigned long)(uintptr_t)op2_ps_hold_reg,
+				    (unsigned long)(uintptr_t)op2_wdt_reg);
+			}
+
 			return 1;
 		}
 	}
@@ -822,3 +858,37 @@ pe_arm_init_timer(void *args)
 
 	return 1;
 }
+
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+void op2_secondary_cpu_init(void);
+
+void op2_secondary_cpu_init(void)
+{
+	if (op2_gic_dist_base != 0) {
+		volatile uint32_t *gicd = (volatile uint32_t *)op2_gic_dist_base;
+		/* Group 1 (non-secure) for banked PPI vtimer and SGI 1 */
+		gicd[0x0080 / 4] |= (1U << op2_vtimer_intid) | (1U << 1);
+		volatile uint8_t *priority = (volatile uint8_t *)(op2_gic_dist_base + 0x0400);
+		priority[op2_vtimer_intid] = 0x80;
+		priority[1] = 0x80;
+		/* Enable banked PPI vtimer and SGI 1 */
+		gicd[0x0100 / 4] |= (1U << op2_vtimer_intid) | (1U << 1);
+		__asm__ volatile("dmb sy" ::: "memory");
+	}
+
+	if (op2_gic_cpu_base != 0) {
+		volatile uint32_t *gicc = (volatile uint32_t *)op2_gic_cpu_base;
+		gicc[0x0004 / 4] = 0xf0;
+		gicc[0x0008 / 4] = 0;
+		gicc[0x0000 / 4] = 0xf;
+		__asm__ volatile("dmb sy" ::: "memory");
+	}
+
+	uint32_t init_tick = (uint32_t)(gPEClockFrequencyInfo.timebase_frequency_hz / 100);
+	if (init_tick == 0) init_tick = 192000;
+	op2_vtimer_set_decrementer(init_tick);
+	op2_vtimer_enable();
+
+	kprintf("OP2: Secondary CPU %d initialized GICv2 and vtimer\n", cpu_number());
+}
+#endif

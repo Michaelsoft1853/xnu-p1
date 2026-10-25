@@ -1849,6 +1849,11 @@ __mac_syscall(proc_t p, struct __mac_syscall_args *uap, int *retv __unused)
 		mac_policy_list_unbusy();
 	}
 
+	if (error == ENOPOLICY) {
+		printf("mac_syscall: policy '%s' not registered (call=0x%x from pid %d)\n",
+		       target, uap->call, p ? p->p_pid : -1);
+	}
+
 done:
 	return error;
 }

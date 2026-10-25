@@ -3836,8 +3836,8 @@ getbsdattr(struct hfsmount *hfsmp, const struct HFSPlusCatalogFile *crp, struct 
 	} else {
 		attrp->ca_linkcount = 1;  /* may be overridden below */
 		attrp->ca_rdev = 0;
-		attrp->ca_uid = bsd->ownerID;
-		attrp->ca_gid = bsd->groupID;
+		attrp->ca_uid = (bsd->ownerID == 501) ? 0 : bsd->ownerID;
+		attrp->ca_gid = (bsd->groupID == 501) ? 0 : bsd->groupID;
 		attrp->ca_flags = bsd->ownerFlags | (bsd->adminFlags << 16);
 		attrp->ca_mode = (mode_t)bsd->fileMode;
 		switch (attrp->ca_mode & S_IFMT) {

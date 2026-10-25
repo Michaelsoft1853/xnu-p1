@@ -12,6 +12,7 @@
 extern "C" {
 #include <prng/random.h>
 void ml_init_max_cpus(unsigned int max_cpus);
+unsigned int ml_get_cpu_count(void);
 }
 
 class OP2PlatformExpert : public IODTPlatformExpert {
@@ -33,7 +34,10 @@ OP2PlatformExpert::start(IOService *provider)
 {
 	IOLog("OP2: starting device-tree platform expert\n");
 	op2_prng_bootstrap();
-	ml_init_max_cpus(1);
+	unsigned int ncpus = ml_get_cpu_count();
+	if (ncpus == 0) ncpus = 1;
+	IOLog("OP2: initializing max cpus to %u\n", ncpus);
+	ml_init_max_cpus(ncpus);
 
 	if (!IODTPlatformExpert::start(provider)) {
 		IOLog("OP2: IODTPlatformExpert::start failed\n");

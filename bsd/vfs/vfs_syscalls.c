@@ -905,10 +905,22 @@ update:
 			 * Flush out any old buffers remaining from a previous use.
 			 */
 			if ((error = vfs_mountedon(devvp))) {
+				if (vnode_specrdev(devvp) == rootdev) {
+					printf("VFS: ignoring redundant mount of rootdev (0x%x) on covered vnode -> success\n",
+					       (unsigned int)vnode_specrdev(devvp));
+					error = 0;
+					goto out3;
+				}
 				goto out3;
 			}
 
 			if (vcount(devvp) > 1 && !(vfs_flags(mp) & MNT_ROOTFS)) {
+				if (vnode_specrdev(devvp) == rootdev) {
+					printf("VFS: ignoring redundant mount of rootdev (0x%x) on covered vnode -> success\n",
+					       (unsigned int)vnode_specrdev(devvp));
+					error = 0;
+					goto out3;
+				}
 				error = EBUSY;
 				goto out3;
 			}

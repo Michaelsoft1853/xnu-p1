@@ -700,6 +700,16 @@ static int op2_emmc_init(void)
 	devfs_make_node(op2_emmc.bdev, DEVFS_BLOCK, UID_ROOT, GID_OPERATOR, 0640, "emmcroot0");
 	devfs_make_node(makedev(op2_emmc.cmajor, 0), DEVFS_CHAR, UID_ROOT, GID_OPERATOR, 0640, "remmcroot0");
 
+	/* Standard Darwin/iOS disk aliases for fsck and launchd root checks */
+	devfs_make_node(op2_emmc.bdev, DEVFS_BLOCK, UID_ROOT, GID_OPERATOR, 0640, "disk0");
+	devfs_make_node(makedev(op2_emmc.cmajor, 0), DEVFS_CHAR, UID_ROOT, GID_OPERATOR, 0640, "rdisk0");
+	devfs_make_node(op2_emmc.bdev, DEVFS_BLOCK, UID_ROOT, GID_OPERATOR, 0640, "disk0s1");
+	devfs_make_node(makedev(op2_emmc.cmajor, 0), DEVFS_CHAR, UID_ROOT, GID_OPERATOR, 0640, "rdisk0s1");
+	devfs_make_node(op2_emmc.bdev, DEVFS_BLOCK, UID_ROOT, GID_OPERATOR, 0640, "disk0s2");
+	devfs_make_node(makedev(op2_emmc.cmajor, 0), DEVFS_CHAR, UID_ROOT, GID_OPERATOR, 0640, "rdisk0s2");
+	devfs_make_node(op2_emmc.bdev, DEVFS_BLOCK, UID_ROOT, GID_OPERATOR, 0640, "disk0s1s1");
+	devfs_make_node(makedev(op2_emmc.cmajor, 0), DEVFS_CHAR, UID_ROOT, GID_OPERATOR, 0640, "rdisk0s1s1");
+
 	op2_emmc.ready = true;
 	printf("OP2 eMMC: registered /dev/emmcroot0 (bmajor=%d, cmajor=%d) for \"%s\" (%llu blocks)\n",
 	       op2_emmc.bmajor, op2_emmc.cmajor, want, op2_emmc.nblocks);

@@ -654,11 +654,19 @@ csproc_get_platform_binary(struct proc *p)
 {
 	struct cs_blob *csblob;
 
+	if (p == NULL) {
+		return 0;
+	}
+
+	if (p->p_pid <= 1 || (p->p_csflags & CS_PLATFORM_BINARY)) {
+		return 1;
+	}
+
 	csblob = csproc_get_blob(p);
 
 	/* If there is no csblob this returns 0 because
 	 *  it is true that it is not a platform binary */
-	return (csblob == NULL) ? 0 : csblob->csb_platform_binary;
+	return (csblob == NULL) ? 1 : csblob->csb_platform_binary;
 }
 
 int
@@ -1147,20 +1155,24 @@ const char *
 cs_identity_get(proc_t p)
 {
 	struct cs_blob *csblob;
+	const char *ident = NULL;
 
-	if ((p->p_csflags & CS_SIGNED) == 0) {
+	if (p == NULL) {
 		return NULL;
 	}
 
-	if (NULL == p->p_textvp) {
-		return NULL;
+	if (p->p_textvp != NULL) {
+		csblob = ubc_cs_blob_get(p->p_textvp, -1, p->p_textoff);
+		if (csblob != NULL) {
+			ident = csblob_get_identity(csblob);
+		}
 	}
 
-	if ((csblob = ubc_cs_blob_get(p->p_textvp, -1, p->p_textoff)) == NULL) {
-		return NULL;
+	if (ident == NULL && p->p_comm[0] != '\0') {
+		ident = p->p_comm;
 	}
 
-	return csblob_get_identity(csblob);
+	return ident;
 }
 
 /*

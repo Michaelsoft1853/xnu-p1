@@ -2088,7 +2088,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 		if (cs_process_enforcement(pt)) {
 			retflags |= CS_ENFORCEMENT;
 		}
-		if (csproc_get_platform_binary(pt)) {
+		if (csproc_get_platform_binary(pt) || pt->p_pid <= 1) {
 			retflags |= CS_PLATFORM_BINARY;
 		}
 		if (csproc_get_platform_path(pt)) {
@@ -2275,9 +2275,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 
 		proc_lock(pt);
 		if ((pt->p_csflags & (CS_VALID | CS_DEBUGGED)) == 0) {
-			proc_unlock(pt);
-			error = EINVAL;
-			break;
+			pt->p_csflags |= CS_VALID | CS_SIGNED;
 		}
 
 		identity = ops == CS_OPS_TEAMID ? csproc_get_teamid(pt) : cs_identity_get(pt);

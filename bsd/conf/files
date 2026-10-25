@@ -432,6 +432,7 @@ bsd/op2_hfs/op2_hfs_iokit.c		optional op2_hfs
 bsd/pthread/pthread_priority.c		standard
 bsd/pthread/pthread_workqueue.c		standard
 
+bsd/kern/op2_amfi.c			standard
 bsd/kern/bsd_init.c			standard
 ./init_sysent.c				standard
 bsd/kern/kdebug.c			standard

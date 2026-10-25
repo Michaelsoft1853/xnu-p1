@@ -642,6 +642,24 @@ cpu_start(int cpu)
 
 		flush_dcache((vm_offset_t)&CpuDataEntries[cpu], sizeof(cpu_data_entry_t), FALSE);
 		flush_dcache((vm_offset_t)cpu_data_ptr, sizeof(cpu_data_t), FALSE);
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+		/* The reset stub loads these through physical addresses with caches off.
+		 * Use VA range cleans to PoC. */
+		extern reset_handler_data_t ResetHandlerData;
+		extern uint64_t cpu_ttep;
+		extern sysreg_restore_t sysreg_restore;
+		extern boot_args const_boot_args;
+		extern void CleanPoC_DcacheRegion_Force(vm_offset_t va, unsigned length);
+		CleanPoC_DcacheRegion_Force((vm_offset_t)CpuDataEntries, sizeof(CpuDataEntries));
+		CleanPoC_DcacheRegion_Force((vm_offset_t)cpu_data_ptr, sizeof(cpu_data_t));
+		CleanPoC_DcacheRegion_Force((vm_offset_t)&ResetHandlerData, sizeof(ResetHandlerData));
+		CleanPoC_DcacheRegion_Force((vm_offset_t)&const_boot_args, sizeof(const_boot_args));
+		CleanPoC_DcacheRegion_Force((vm_offset_t)&sysreg_restore, sizeof(sysreg_restore));
+		CleanPoC_DcacheRegion_Force((vm_offset_t)&cpu_ttep, sizeof(cpu_ttep));
+		CleanPoC_DcacheRegion_Force((vm_offset_t)phystokv(const_boot_args.topOfKernelData), 4 * PAGE_SIZE);
+		CleanPoC_DcacheRegion_Force((vm_offset_t)phystokv(cpu_ttep), PAGE_SIZE);
+		__asm__ volatile("dsb sy" ::: "memory");
+#endif
 		(void) PE_cpu_start(cpu_data_ptr->cpu_id, (vm_offset_t)NULL, (vm_offset_t)NULL);
 	}
 

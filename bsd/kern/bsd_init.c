@@ -542,6 +542,9 @@ bsd_init(void)
 	 */
 	check_policy_init(policy_check_flags);
 #endif
+
+	extern void op2_amfi_policy_register(void);
+	op2_amfi_policy_register();
 #endif /* MAC */
 
 	ulock_initialize();
