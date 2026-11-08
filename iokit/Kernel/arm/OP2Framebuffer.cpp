@@ -109,6 +109,16 @@ enum {
 #define OP2_FB_DEFAULT_HEIGHT         1920
 #define OP2_FB_DEFAULT_ROWBYTES       4352    /* 1088 * 4 */
 
+class IOAcceleratorES : public IOService {
+	OSDeclareDefaultStructors(IOAcceleratorES);
+};
+OSDefineMetaClassAndStructors(IOAcceleratorES, IOService);
+
+class AGXAccelerator : public IOAcceleratorES {
+	OSDeclareDefaultStructors(AGXAccelerator);
+};
+OSDefineMetaClassAndStructors(AGXAccelerator, IOAcceleratorES);
+
 class IOMobileFramebuffer : public IOService {
 	OSDeclareDefaultStructors(IOMobileFramebuffer);
 };
@@ -436,6 +446,33 @@ AppleCLCD::start(IOService *provider)
 	IOLog("OP2 FB: AppleCLCD %ux%u stride %u at 0x%llx, default surface %u, flush every %u vsyncs, client-ui %s\n",
 	    fWidth, fHeight, fRowBytes, fPhys, fSurface->id, fFlushTicks, fClientUI ? "on" : "off");
 	op2_fb_instance = this;
+
+	/*
+	 * Phase 1 Metal Bring-Up: Publish IOAcceleratorES service.
+	 * CoreAnimation and Metal.framework discover graphics accelerators via
+	 * IOServiceMatching("IOAcceleratorES") and IOServiceMatching("AGXAccelerator").
+	 * When boot-arg metal=N is present (e.g. metal=1, metal=2, metal=3), we set
+	 * MetalPluginName and MetalPluginClassName so userland loads OP2Metal.bundle.
+	 */
+	AGXAccelerator *accelerator = OSTypeAlloc(AGXAccelerator);
+	if (accelerator != NULL) {
+		if (accelerator->init() && accelerator->attach(this)) {
+			uint32_t metal = 0;
+			accelerator->setName("sgx");
+			if (PE_parse_boot_argn("metal", &metal, sizeof(metal)) && metal != 0) {
+				accelerator->setProperty("MetalPluginName", "OP2Metal");
+				accelerator->setProperty("MetalPluginClassName", "OP2MetalDevice");
+				accelerator->setProperty("IOGLBundleName", "OP2Metal");
+				accelerator->setProperty("IOGLPluginName", "OP2Metal");
+				IOLog("OP2 FB: metal=%u: published IOAcceleratorES/AGXAccelerator naming OP2Metal\n", metal);
+			} else {
+				IOLog("OP2 FB: published IOAcceleratorES/AGXAccelerator (metal plug-in disabled)\n");
+			}
+			accelerator->registerService();
+		}
+		accelerator->release();
+	}
+
 	return true;
 }
 
