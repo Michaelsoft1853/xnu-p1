@@ -65,11 +65,12 @@ OP2Surface *op2_surface_create_physical(uint64_t phys, uint32_t width,
 
 /* Phase 8 MDP5 Direct Scanout Carveout Allocator */
 #define OP2_CARVEOUT_BASE             0x03400000ULL
-#define OP2_CARVEOUT_SIZE             (34ULL << 20) /* 34 MiB reserved by LK */
-#define OP2_CARVEOUT_SLOT_SIZE        (8ULL << 20)  /* 8 MiB per slot */
-#define OP2_CARVEOUT_MAX_SLOTS        4
+#define OP2_CARVEOUT_SIZE             (34ULL << 20) /* 34 MiB reserved by LK (up to 0x05600000) */
+#define OP2_CARVEOUT_SLOT0_SIZE       (8ULL << 20)  /* 8 MiB for AppleCLCD::fSurface (1080x1920) */
+#define OP2_CARVEOUT_SLOT_SIZE        (12ULL << 20) /* 12 MiB per display buffer slot (1242x2208 = 11.3 MiB) */
+#define OP2_CARVEOUT_MAX_SLOTS        3             /* Slot 0 (fSurface), Slot 1, Slot 2 */
 
-uint64_t op2_carveout_alloc_slot(void);
+uint64_t op2_carveout_alloc_slot(uint32_t size);
 void op2_carveout_free_slot(uint64_t phys);
 
 /* Send right for the surface in task (IOSurfaceLookupFromMachPort). */

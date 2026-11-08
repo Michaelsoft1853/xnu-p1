@@ -745,12 +745,14 @@ AppleCLCD::present(const uint8_t *rec)
 		 */
 		OP2Surface *best = NULL;
 		uint32_t best_nz = 100;
+		uint32_t highest_fullscreen_id = 0;
 		for (uint32_t sid = 2; sid < 64; sid++) {
 			OP2Surface *cand = op2_surface_copy(sid);
 			if (cand == NULL) {
 				continue;
 			}
 			if (cand->width >= 1000 && cand->height >= 1000) {
+				highest_fullscreen_id = cand->id;
 				uint32_t nz = op2_fb_sample_nz(cand, 5000);
 				if (nz > best_nz) {
 					best_nz = nz;
@@ -768,6 +770,8 @@ AppleCLCD::present(const uint8_t *rec)
 		if (best != NULL) {
 			target_id = best->id;
 			best->release();
+		} else if (highest_fullscreen_id != 0) {
+			target_id = highest_fullscreen_id;
 		}
 	}
 
@@ -1123,8 +1127,13 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
 		outCount = 1;
 		break;
 	case kOP2FBGetDisplaySize:
-		out[0] = fFB->fWidth;
-		out[1] = fFB->fHeight;
+		/*
+		 * On iPhone 6 Plus (n56ap), UIKit renders at 3x Retina (1242x2208).
+		 * Reporting 1242x2208 matches native n56ap display geometry and
+		 * prevents CoreAnimation from dropping [1242x2208] render surfaces.
+		 */
+		out[0] = 1242;
+		out[1] = 2208;
 		outCount = 2;
 		break;
 	case kOP2FBRequestPowerChange:
@@ -1170,12 +1179,12 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
 		outCount = 1;
 		if (args->structureOutput != NULL && args->structureOutputSize >= 64) {
 			uint32_t *fi = (uint32_t *)args->structureOutput;
-			fi[0] = fFB->fWidth;          /* 1080 */
-			fi[1] = fFB->fHeight;         /* 1920 */
+			fi[0] = 1242;                 /* Retina logical display width */
+			fi[1] = 2208;                 /* Retina logical display height */
 			fi[2] = 60;                   /* refresh rate 60 Hz */
 			fi[3] = 0;                    /* flags */
 			fi[4] = OP2_FB_FORMAT_BGRA;   /* format */
-			fi[5] = fFB->fRowBytes;       /* 4352 */
+			fi[5] = 1242 * 4;             /* 4968 */
 		}
 		break;
 	case kOP2FBChangeFrameInfo:

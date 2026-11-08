@@ -97,16 +97,19 @@ OSDefineMetaClassAndStructors(OP2Surface, OSObject);
 /*
  * Phase 8 MDP5 Direct Scanout Carveout Allocator:
  * Slot 0 is reserved for AppleCLCD default surface (fPhys = 0x03400000).
- * Slots 1..3 (0x03c00000, 0x04400000, 0x04c00000) are dynamically assigned
- * to full-screen client display surfaces (1080x1920) so the MDP5 hardware
+ * Slots 1..2 (0x03c00000, 0x04800000) are dynamically assigned
+ * to full-screen client display surfaces (1080x1920 or 1242x2208) so the MDP5 hardware
  * can scan out directly via DMA without CPU memory copy.
  */
-static bool op2_carveout_used[OP2_CARVEOUT_MAX_SLOTS] = { true, false, false, false };
+static bool op2_carveout_used[OP2_CARVEOUT_MAX_SLOTS] = { true, false, false };
 static IOLock *op2_carveout_lock = NULL;
 
 uint64_t
-op2_carveout_alloc_slot(void)
+op2_carveout_alloc_slot(uint32_t size)
 {
+	if (size > OP2_CARVEOUT_SLOT_SIZE) {
+		return 0;
+	}
 	if (op2_carveout_lock == NULL) {
 		IOLock *lock = IOLockAlloc();
 		if (!OSCompareAndSwapPtr(NULL, lock, &op2_carveout_lock)) {
@@ -118,7 +121,7 @@ op2_carveout_alloc_slot(void)
 	for (uint32_t i = 1; i < OP2_CARVEOUT_MAX_SLOTS; i++) {
 		if (!op2_carveout_used[i]) {
 			op2_carveout_used[i] = true;
-			phys = OP2_CARVEOUT_BASE + (uint64_t)i * OP2_CARVEOUT_SLOT_SIZE;
+			phys = OP2_CARVEOUT_BASE + OP2_CARVEOUT_SLOT0_SIZE + (uint64_t)(i - 1) * OP2_CARVEOUT_SLOT_SIZE;
 			break;
 		}
 	}
@@ -129,12 +132,12 @@ op2_carveout_alloc_slot(void)
 void
 op2_carveout_free_slot(uint64_t phys)
 {
-	if (phys < OP2_CARVEOUT_BASE ||
+	if (phys < OP2_CARVEOUT_BASE + OP2_CARVEOUT_SLOT0_SIZE ||
 	    phys >= OP2_CARVEOUT_BASE + OP2_CARVEOUT_SIZE ||
 	    op2_carveout_lock == NULL) {
 		return;
 	}
-	uint32_t slot = (uint32_t)((phys - OP2_CARVEOUT_BASE) / OP2_CARVEOUT_SLOT_SIZE);
+	uint32_t slot = 1 + (uint32_t)((phys - (OP2_CARVEOUT_BASE + OP2_CARVEOUT_SLOT0_SIZE)) / OP2_CARVEOUT_SLOT_SIZE);
 	if (slot >= 1 && slot < OP2_CARVEOUT_MAX_SLOTS) {
 		IOLockLock(op2_carveout_lock);
 		op2_carveout_used[slot] = false;
@@ -148,7 +151,7 @@ OP2Surface::free()
 	if (memory != NULL) {
 		IOPhysicalLength segLen = 0;
 		uint64_t phys = (uint64_t)memory->getPhysicalSegment(0, &segLen);
-		if (phys >= OP2_CARVEOUT_BASE + OP2_CARVEOUT_SLOT_SIZE &&
+		if (phys >= OP2_CARVEOUT_BASE + OP2_CARVEOUT_SLOT0_SIZE &&
 		    phys < OP2_CARVEOUT_BASE + OP2_CARVEOUT_SIZE) {
 			op2_carveout_free_slot(phys);
 		} else if (OSDynamicCast(IOBufferMemoryDescriptor, memory) != NULL) {
@@ -797,11 +800,11 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
 
 		/*
 		 * Phase 8 MDP5 Direct Scanout Optimization:
-		 * If this is a full-screen display surface (1080x1920), allocate it
+		 * If this is a full-screen display surface (>= 1000x1000), allocate it
 		 * from the physical MDSS continuous splash carveout.
 		 */
-		if (s->width == 1080 && s->height == 1920 && s->allocSize <= OP2_CARVEOUT_SLOT_SIZE) {
-			carveout_phys = op2_carveout_alloc_slot();
+		if (s->width >= 1000 && s->height >= 1000 && s->allocSize <= OP2_CARVEOUT_SLOT_SIZE) {
+			carveout_phys = op2_carveout_alloc_slot(s->allocSize);
 		}
 
 		if (carveout_phys != 0) {
