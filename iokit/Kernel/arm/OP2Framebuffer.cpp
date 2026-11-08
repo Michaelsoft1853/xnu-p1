@@ -901,9 +901,10 @@ AppleCLCD::present(const uint8_t *rec)
 			fActivePipe[0x04 / 4] = (s->height << 16) | s->width;
 			fActivePipe[0x30 / 4] = 0x000236ffu;
 			fActivePipe[0x34 / 4] = 0x03020001u;
-			if (pc <= 4 || (pc % 60) == 0) {
-				IOLog("OP2 FB: direct hardware scanout surf %u at 0x%llx (%ux%u stride %u)\n",
-				    shown_id, direct_phys, s->width, s->height, s->bytesPerRow);
+			static uint32_t sDirectScanoutLogged = 0;
+			if (++sDirectScanoutLogged <= 5 || (sDirectScanoutLogged % 60) == 0) {
+				IOLog("OP2 FB: direct hardware scanout surf %u at 0x%llx (%ux%u stride %u, switch #%u)\n",
+				    shown_id, direct_phys, s->width, s->height, s->bytesPerRow, sDirectScanoutLogged);
 			}
 		}
 	} else {

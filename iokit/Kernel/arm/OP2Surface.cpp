@@ -101,7 +101,7 @@ OSDefineMetaClassAndStructors(OP2Surface, OSObject);
  * to full-screen client display surfaces (1080x1920 or 1242x2208) so the MDP5 hardware
  * can scan out directly via DMA without CPU memory copy.
  */
-static bool op2_carveout_used[OP2_CARVEOUT_MAX_SLOTS] = { true, false, false };
+static bool op2_carveout_used[OP2_CARVEOUT_MAX_SLOTS] = { true, false, false, false };
 static IOLock *op2_carveout_lock = NULL;
 
 uint64_t
@@ -816,8 +816,6 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
 					s->kernelBuffer = (void *)s->kernelMap->getVirtualAddress();
 				}
 			}
-			IOLog("OP2 SURF: allocated carveout slot 0x%llx for surface %u (%ux%u)\n",
-			    carveout_phys, s->id, s->width, s->height);
 		} else {
 			if ((uint64_t)OSAddAtomic64(s->allocSize, (volatile SInt64 *)&op2_surface_wired) +
 			    s->allocSize <= OP2_SURFACE_WIRED_MAX) {
@@ -840,6 +838,9 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
 			s->memory = mem;
 			if (!op2_surface_publish(s)) {
 				ret = kIOReturnNoResources;
+			} else if (carveout_phys != 0) {
+				IOLog("OP2 SURF: allocated carveout slot 0x%llx for surface %u (%ux%u)\n",
+				    carveout_phys, s->id, s->width, s->height);
 			}
 		}
 	}
