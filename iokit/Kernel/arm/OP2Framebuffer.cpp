@@ -57,6 +57,7 @@ static uint64_t op2_fb_present_count; /* moved up: vsyncFired timeline reads it 
 class AppleCLCD; /* fwd: full type below, before use */
 static AppleCLCD *op2_fb_instance = NULL; /* set in start(), for deadline dump */
 static uint32_t op2_fb_last_shown = 0;    /* mirror of present()'s sLastShown */
+static uint64_t op2_fb_last_direct_phys = 0; /* physical address of presented surface */
 static uint8_t op2_fb_last_rec[0x278];    /* last swap record, for deadline dump */
 static uint32_t op2_fb_last_nz = 0;       /* its sampled content */
 static uint64_t op2_fb_last_pc = 0;
@@ -882,6 +883,7 @@ AppleCLCD::present(const uint8_t *rec)
 	if (s->memory != NULL) {
 		direct_phys = (uint64_t)s->memory->getPhysicalSegment(0, &segLen);
 	}
+	op2_fb_last_direct_phys = direct_phys;
 
 	if (direct_phys != 0 && segLen >= (uint64_t)s->bytesPerRow * s->height &&
 	    s->width == fWidth && s->height == fHeight && fActivePipe != NULL) {
@@ -995,8 +997,8 @@ op2_fb_dump_stats(void)
 			samples++;
 		}
 	}
-	printf("OP2 FB STATS: presents=%llu kicks=%llu shown=%u active_phys=0x%08x panel=%ux%u panel_nz=%u/%u lastnz=%u\n",
-	    presents, kicks, shown, active_phys, w, h, panel_nz, samples, op2_fb_last_nz);
+	printf("OP2 FB STATS: presents=%llu kicks=%llu shown=%u active_phys=0x%08x direct_phys=0x%08llx panel=%ux%u panel_nz=%u/%u lastnz=%u\n",
+	    presents, kicks, shown, active_phys, op2_fb_last_direct_phys, w, h, panel_nz, samples, op2_fb_last_nz);
 	/* Output directly via printf to be captured in persistent ramoops buffer */
 	printf("OP2 FB LAST begin rec=%llu size=%u\n",
 	    op2_fb_last_pc, (uint32_t)sizeof(op2_fb_last_rec));
@@ -1127,13 +1129,8 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
 		outCount = 1;
 		break;
 	case kOP2FBGetDisplaySize:
-		/*
-		 * On iPhone 6 Plus (n56ap), UIKit renders at 3x Retina (1242x2208).
-		 * Reporting 1242x2208 matches native n56ap display geometry and
-		 * prevents CoreAnimation from dropping [1242x2208] render surfaces.
-		 */
-		out[0] = 1242;
-		out[1] = 2208;
+		out[0] = fFB->fWidth;
+		out[1] = fFB->fHeight;
 		outCount = 2;
 		break;
 	case kOP2FBRequestPowerChange:
@@ -1179,12 +1176,12 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
 		outCount = 1;
 		if (args->structureOutput != NULL && args->structureOutputSize >= 64) {
 			uint32_t *fi = (uint32_t *)args->structureOutput;
-			fi[0] = 1242;                 /* Retina logical display width */
-			fi[1] = 2208;                 /* Retina logical display height */
+			fi[0] = fFB->fWidth;          /* 1080 */
+			fi[1] = fFB->fHeight;         /* 1920 */
 			fi[2] = 60;                   /* refresh rate 60 Hz */
 			fi[3] = 0;                    /* flags */
 			fi[4] = OP2_FB_FORMAT_BGRA;   /* format */
-			fi[5] = 1242 * 4;             /* 4968 */
+			fi[5] = fFB->fRowBytes;       /* 4352 */
 		}
 		break;
 	case kOP2FBChangeFrameInfo:
