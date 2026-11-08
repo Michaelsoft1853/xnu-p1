@@ -61,7 +61,10 @@ OP2GPU::readGPU(uint32_t word_offset)
 bool
 OP2GPU::uncollapseGDSC(uint32_t byte_offset, const char *name)
 {
+	IOLog("OP2 GPU: reading GDSC %s (offset 0x%04x)...\n", name, byte_offset);
 	uint32_t val = readMMSS(byte_offset);
+	IOLog("OP2 GPU: GDSC %s initial value = 0x%08x\n", name, val);
+
 	if ((val & GDSC_PWR_ON_BIT) && !(val & GDSC_SW_COLLAPSE_BIT)) {
 		IOLog("OP2 GPU: GDSC %s already uncollapsed (0x%08x)\n", name, val);
 		return true;
@@ -71,8 +74,8 @@ OP2GPU::uncollapseGDSC(uint32_t byte_offset, const char *name)
 	val &= ~GDSC_SW_COLLAPSE_BIT;
 	writeMMSS(byte_offset, val);
 
-	/* Poll for PWR_ON bit to be set */
-	for (int i = 0; i < 2000; i++) {
+	/* Poll for PWR_ON bit to be set (up to 100 tries of 10us = 1ms) */
+	for (int i = 0; i < 100; i++) {
 		val = readMMSS(byte_offset);
 		if (val & GDSC_PWR_ON_BIT) {
 			IOLog("OP2 GPU: GDSC %s successfully uncollapsed (0x%08x, took %d us)\n",
@@ -82,14 +85,17 @@ OP2GPU::uncollapseGDSC(uint32_t byte_offset, const char *name)
 		IODelay(10);
 	}
 
-	IOLog("OP2 GPU: ERROR: GDSC %s timeout waiting for PWR_ON (0x%08x)\n", name, val);
+	IOLog("OP2 GPU: WARNING: GDSC %s timeout waiting for PWR_ON (0x%08x)\n", name, val);
 	return false;
 }
 
 bool
 OP2GPU::enableBranchClock(uint32_t byte_offset, const char *name)
 {
+	IOLog("OP2 GPU: reading clock %s (offset 0x%04x)...\n", name, byte_offset);
 	uint32_t val = readMMSS(byte_offset);
+	IOLog("OP2 GPU: clock %s initial value = 0x%08x\n", name, val);
+
 	if ((val & CBCR_CLK_ENABLE_BIT) && !(val & CBCR_CLK_OFF_BIT)) {
 		IOLog("OP2 GPU: Clock %s already active (0x%08x)\n", name, val);
 		return true;
@@ -98,8 +104,8 @@ OP2GPU::enableBranchClock(uint32_t byte_offset, const char *name)
 	/* Write CLK_ENABLE bit */
 	writeMMSS(byte_offset, val | CBCR_CLK_ENABLE_BIT);
 
-	/* Poll for CLK_OFF bit to become 0 */
-	for (int i = 0; i < 2000; i++) {
+	/* Poll for CLK_OFF bit to become 0 (up to 100 tries of 10us = 1ms) */
+	for (int i = 0; i < 100; i++) {
 		val = readMMSS(byte_offset);
 		if (!(val & CBCR_CLK_OFF_BIT)) {
 			IOLog("OP2 GPU: Clock %s enabled (0x%08x, took %d us)\n",
@@ -116,20 +122,27 @@ OP2GPU::enableBranchClock(uint32_t byte_offset, const char *name)
 bool
 OP2GPU::powerOnClocks(void)
 {
-	IOLog("OP2 GPU: uncollapsing GDSC power domains...\n");
+	bool ok = true;
+	IOLog("OP2 GPU: probing MMSS GDSC power domains...\n");
 	if (!uncollapseGDSC(MMSS_OXILI_CX_GDSC, "oxili_cx")) {
-		IOLog("OP2 GPU: failed to uncollapse oxili_cx\n");
+		ok = false;
 	}
 	if (!uncollapseGDSC(MMSS_OXILI_GX_GDSC, "oxili_gx")) {
-		IOLog("OP2 GPU: failed to uncollapse oxili_gx\n");
+		ok = false;
 	}
 
-	IOLog("OP2 GPU: enabling branch clocks...\n");
-	enableBranchClock(MMSS_OXILICX_AHB_CBCR, "oxilicx_ahb");
-	enableBranchClock(MMSS_OXILI_GFX3D_CBCR, "oxili_gfx3d");
-	enableBranchClock(MMSS_OXILI_RBBMTIMER_CBCR, "oxili_rbbmtimer");
+	IOLog("OP2 GPU: probing MMSS branch clocks...\n");
+	if (!enableBranchClock(MMSS_OXILICX_AHB_CBCR, "oxilicx_ahb")) {
+		ok = false;
+	}
+	if (!enableBranchClock(MMSS_OXILI_GFX3D_CBCR, "oxili_gfx3d")) {
+		ok = false;
+	}
+	if (!enableBranchClock(MMSS_OXILI_RBBMTIMER_CBCR, "oxili_rbbmtimer")) {
+		ok = false;
+	}
 
-	return true;
+	return ok;
 }
 
 bool
@@ -340,27 +353,59 @@ OP2GPU::start(IOService *provider)
 		return true;
 	}
 
-	IOLog("OP2 GPU: Initializing Adreno 430 GPU driver (boot-arg gpu=%u)...\n", gpu_arg);
+	uint32_t gpu_hw = 0;
+	PE_parse_boot_argn("gpu_hw", &gpu_hw, sizeof(gpu_hw));
+
+	IOLog("OP2 GPU: Initializing Adreno 430 GPU driver (gpu=%u, gpu_hw=%u)...\n", gpu_arg, gpu_hw);
+
+	/* Set device properties in IORegistry */
+	setProperty("DeviceName", "Qualcomm Adreno 430");
+	setProperty("ChipID", 0x04030002, 32);
+	setProperty("MetalPluginName", "OP2Metal");
+	setProperty("MetalPluginClassName", "OP2MetalDevice");
+	setProperty("IOGLBundleName", "OP2Metal");
+	setProperty("IOGLPluginName", "OP2Metal");
+	setProperty("RingBufferSize", OP2_GPU_RB_SIZE, 32);
+
+	if (gpu_hw == 0) {
+		IOLog("OP2 GPU: Running in safe software-shim mode (gpu_hw=0); direct silicon MMIO bypassed to prevent AXI bus stall\n");
+		setProperty("HardwareAccelerated", kOSBooleanFalse);
+		registerService();
+		IOLog("OP2 GPU: driver published in IORegistry successfully!\n");
+		return true;
+	}
+
+	/* Direct Hardware Bring-Up (only if gpu_hw=1 is explicitly passed) */
+	IOLog("OP2 GPU: Attempting physical silicon bring-up (gpu_hw=1)...\n");
 
 	/* 1. Map MMSS CC and GPU MMIO */
 	fMMSSBase = ml_io_map(OP2_MMSSCC_PHYS_BASE, OP2_MMSSCC_PHYS_SIZE);
 	if (!fMMSSBase) {
 		IOLog("OP2 GPU: ERROR: failed to map MMSS CC at 0x%llx\n", OP2_MMSSCC_PHYS_BASE);
-		return false;
+		registerService();
+		return true;
 	}
 	fGPUBase = ml_io_map(OP2_ADRENO_PHYS_BASE, OP2_ADRENO_PHYS_SIZE);
 	if (!fGPUBase) {
 		IOLog("OP2 GPU: ERROR: failed to map Adreno MMIO at 0x%llx\n", OP2_ADRENO_PHYS_BASE);
-		return false;
+		registerService();
+		return true;
 	}
 	IOLog("OP2 GPU: MMIO mapped: MMSSCC=%p Adreno=%p\n", (void *)fMMSSBase, (void *)fGPUBase);
 
 	/* 2. Power on GDSC and branch clocks */
-	powerOnClocks();
+	if (!powerOnClocks()) {
+		IOLog("OP2 GPU: powerOnClocks failed (rails/clocks not active); skipping Adreno MMIO to prevent AXI bus hang\n");
+		setProperty("HardwareAccelerated", kOSBooleanFalse);
+		registerService();
+		IOLog("OP2 GPU: driver registered in safe fallback mode\n");
+		return true;
+	}
 
 	/* 3. Allocate ringbuffer */
 	if (!initRingBuffer()) {
-		return false;
+		registerService();
+		return true;
 	}
 
 	/* 4. Configure Adreno core */
@@ -419,12 +464,7 @@ OP2GPU::start(IOService *provider)
 		IOLog("OP2 GPU: WARNING: Hardware CP_NOP packet wait timed out\n");
 	}
 
-	/* Publish properties in IORegistry */
-	setProperty("DeviceName", "Qualcomm Adreno 430");
-	setProperty("ChipID", 0x04030002, 32);
 	setProperty("HardwareAccelerated", fHardwareInitialized ? kOSBooleanTrue : kOSBooleanFalse);
-	setProperty("RingBufferSize", OP2_GPU_RB_SIZE, 32);
-
 	registerService();
 	IOLog("OP2 GPU: driver published in IORegistry successfully!\n");
 	return true;
