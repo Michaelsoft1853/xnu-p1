@@ -11,12 +11,31 @@
 
 #include "OP2GPU.h"
 #include "op2_a430_fw.h"
+#include "op2_rpm.h"
 #include <pexpert/pexpert.h>
 #include <libkern/OSByteOrder.h>
+#include <sys/systm.h>
+#include <mach/mach_time.h>
+
+#ifndef IOMallocData
+#define IOMallocData(sz) IOMalloc(sz)
+#endif
+#ifndef IOFreeData
+#define IOFreeData(p, sz) IOFree((p), (sz))
+#endif
 
 #if defined(ARM64_BOARD_CONFIG_MSM8994)
 
 OSDefineMetaClassAndStructors(OP2GPU, IOService);
+OSDefineMetaClassAndStructors(OP2GPUUserClient, IOUserClient);
+
+static OP2GPU *gOP2GPUInstance = NULL;
+
+OP2GPU *
+OP2GPU::getInstance(void)
+{
+	return gOP2GPUInstance;
+}
 
 extern "C" {
 vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -123,6 +142,14 @@ bool
 OP2GPU::powerOnClocks(void)
 {
 	bool ok = true;
+
+	IOLog("OP2 GPU: Requesting VDD_GFX (PMI8994 S2) power rail uncollapse via RPM...\n");
+	if (op2_rpm_power_on_gfx()) {
+		IOLog("OP2 GPU: VDD_GFX power rail enabled successfully via RPM!\n");
+	} else {
+		IOLog("OP2 GPU: WARNING: op2_rpm_power_on_gfx failed or unacknowledged!\n");
+	}
+
 	IOLog("OP2 GPU: probing MMSS GDSC power domains...\n");
 	if (!uncollapseGDSC(MMSS_OXILI_CX_GDSC, "oxili_cx")) {
 		ok = false;
@@ -143,6 +170,19 @@ OP2GPU::powerOnClocks(void)
 	}
 
 	return ok;
+}
+
+static inline void
+flushDcache(vm_offset_t va, vm_size_t size)
+{
+	vm_offset_t addr = va & ~63ULL;
+	vm_offset_t end = (va + size + 63ULL) & ~63ULL;
+	__asm__ volatile("dsb sy" ::: "memory");
+	while (addr < end) {
+		__asm__ volatile("dc civac, %0" : : "r"(addr) : "memory");
+		addr += 64;
+	}
+	__asm__ volatile("dsb sy" ::: "memory");
 }
 
 bool
@@ -173,8 +213,8 @@ OP2GPU::initAdrenoRegisters(void)
 	writeGPU(A4XX_UCHE_TRAP_BASE_LO, 0xffff0000);
 	writeGPU(A4XX_UCHE_TRAP_BASE_HI, 0xffff0000);
 
-	/* Set bootstrap speedup chicken bit for A430 */
-	writeGPU(A4XX_CP_DEBUG, (1U << 14));
+	/* CP Debug default */
+	writeGPU(A4XX_CP_DEBUG, (1U << 25));
 
 	return true;
 }
@@ -196,9 +236,23 @@ OP2GPU::initRingBuffer(void)
 	fRingBufferPhys = (uint64_t)phys;
 	fWPTR = 0;
 	bzero(fRingBufferVirt, OP2_GPU_RB_SIZE);
+	flushDcache((vm_offset_t)fRingBufferVirt, OP2_GPU_RB_SIZE);
 
 	IOLog("OP2 GPU: Ringbuffer allocated: virt=%p phys=0x%llx size=%u bytes (%u dwords)\n",
 	      fRingBufferVirt, fRingBufferPhys, OP2_GPU_RB_SIZE, OP2_GPU_RB_DWORDS);
+
+	IOPhysicalAddress status_phys = 0;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+	fStatusPageVirt = (uint32_t *)IOMallocContiguous(4096, 4096, &status_phys);
+#pragma clang diagnostic pop
+	if (fStatusPageVirt) {
+		fStatusPagePhys = (uint64_t)status_phys;
+		bzero(fStatusPageVirt, 4096);
+		flushDcache((vm_offset_t)fStatusPageVirt, 4096);
+		IOLog("OP2 GPU: Status/fence page allocated: virt=%p phys=0x%llx\n",
+		      fStatusPageVirt, fStatusPagePhys);
+	}
 
 	/*
 	 * CP_RB_CNTL:
@@ -220,13 +274,18 @@ OP2GPU::waitRPTR(uint32_t target_rptr, uint32_t timeout_us)
 {
 	for (uint32_t i = 0; i < timeout_us / 10; i++) {
 		uint32_t rptr = readGPU(A4XX_CP_RB_RPTR);
-		if (rptr == target_rptr) {
+		if (rptr >= target_rptr) {
 			return true;
 		}
 		IODelay(10);
 	}
 	uint32_t final_rptr = readGPU(A4XX_CP_RB_RPTR);
-	IOLog("OP2 GPU: waitRPTR timeout! expected=%u actual=%u\n", target_rptr, final_rptr);
+	uint32_t rbbm_stat = readGPU(A4XX_RBBM_STATUS);
+	uint32_t int_stat = readGPU(A4XX_RBBM_INT_0_STATUS);
+	uint32_t ahb_err = readGPU(A4XX_RBBM_AHB_ERROR_STATUS);
+	uint32_t me_stat = readGPU(A4XX_CP_ME_STATUS);
+	IOLog("OP2 GPU: waitRPTR timeout! expected=%u actual=%u (RBBM_STATUS=0x%08x INT=0x%08x AHB_ERR=0x%08x ME_STAT=0x%08x)\n",
+	      target_rptr, final_rptr, rbbm_stat, int_stat, ahb_err, me_stat);
 	return false;
 }
 
@@ -234,14 +293,25 @@ bool
 OP2GPU::submitPacket(const uint32_t *words, uint32_t count)
 {
 	if (!fRingBufferVirt) return false;
+
 	if (fWPTR + count >= OP2_GPU_RB_DWORDS) {
-		IOLog("OP2 GPU: ringbuffer wrap not implemented in early bringup\n");
-		return false;
+		/* Ringbuffer full/wrap: wait for GPU to finish current queue */
+		if (!waitRPTR(fWPTR, 50000)) {
+			IOLog("OP2 GPU: ringbuffer rewind wait timed out!\n");
+			return false;
+		}
+		fWPTR = 0;
+		writeGPU(A4XX_CP_RB_WPTR, 0);
+		writeGPU(A4XX_CP_RB_RPTR, 0);
 	}
 
 	for (uint32_t i = 0; i < count; i++) {
 		fRingBufferVirt[fWPTR + i] = words[i];
 	}
+
+	/* Clean cache to Point of Coherency (DRAM) so GPU CP sees it over AXI DMA */
+	flushDcache((vm_offset_t)&fRingBufferVirt[fWPTR], count * sizeof(uint32_t));
+
 	fWPTR += count;
 
 	OSMemoryBarrier();
@@ -252,73 +322,38 @@ OP2GPU::submitPacket(const uint32_t *words, uint32_t count)
 bool
 OP2GPU::bootstrapMicrocode(void)
 {
-	IOLog("OP2 GPU: bootstrapping Adreno 430 microcode (PFP=%u words, PM4=%u words)...\n",
-	      OP2_A430_PFP_FW_WORDS, OP2_A430_PM4_FW_WORDS);
+	IOLog("OP2 GPU: loading Adreno 430 microcode via AHB MMIO (PFP=%u words, PM4=%u words)...\n",
+	      OP2_A430_PFP_FW_WORDS - 1, OP2_A430_PM4_FW_WORDS - 1);
 
-	/* 1. Overwrite jump table with special bootstrap opcode */
-	writeGPU(A4XX_CP_PFP_UCODE_ADDR, 0x400);
-	writeGPU(A4XX_CP_PFP_UCODE_DATA, 0x6f0009);
+	/* Halt micro-engine while loading instruction RAM */
+	writeGPU(A4XX_CP_ME_CNTL, 1);
 
-	/* 2. Clear ME_HALT to start micro-engine */
+	/*
+	 * Direct AHB Microcode Load (Freedreno / Linux KGSL fallback):
+	 * Writes the microcode instructions directly into CP ME RAM and PFP RAM.
+	 *
+	 * pm4_fw[1..2388] -> A4XX_CP_ME_RAM_DATA at addr 0
+	 * pfp_fw[1..1072] -> A4XX_CP_PFP_UCODE_DATA at addr 0
+	 */
+	writeGPU(A4XX_CP_ME_RAM_WADDR, 0);
+	for (uint32_t i = 1; i < OP2_A430_PM4_FW_WORDS; i++) {
+		writeGPU(A4XX_CP_ME_RAM_DATA, op2_a430_pm4_fw[i]);
+	}
+
+	writeGPU(A4XX_CP_PFP_UCODE_ADDR, 0);
+	for (uint32_t i = 1; i < OP2_A430_PFP_FW_WORDS; i++) {
+		writeGPU(A4XX_CP_PFP_UCODE_DATA, op2_a430_pfp_fw[i]);
+	}
+
+	/* Clear ME_HALT to start micro-engine */
 	writeGPU(A4XX_CP_ME_CNTL, 0);
+	IODelay(100);
 
-	/* 3. Build bootstrap packet */
-	uint32_t pfp_idx = 1;
-	uint32_t pfp_size = OP2_A430_PFP_FW_WORDS - pfp_idx;
-	uint32_t pfp_addr = 0;
+	uint32_t me_cntl = readGPU(A4XX_CP_ME_CNTL);
+	uint32_t rbbm_stat = readGPU(A4XX_RBBM_STATUS);
+	IOLog("OP2 GPU: micro-engine unhalted (CP_ME_CNTL=0x%08x, RBBM_STATUS=0x%08x)\n",
+	      me_cntl, rbbm_stat);
 
-	uint32_t pm4_idx = 1;
-	uint32_t pm4_size = OP2_A430_PM4_FW_WORDS - pm4_idx;
-	uint32_t pm4_addr = 0;
-
-	uint32_t bootstrap_size = pm4_size + pfp_size + 5;
-
-	uint32_t *cmds = &fRingBufferVirt[fWPTR];
-	uint32_t *c = cmds;
-
-	*c++ = cp_type3_packet(CP_BOOTSTRAP_UCODE, bootstrap_size - 1);
-	*c++ = pfp_size;
-	*c++ = pfp_addr;
-	*c++ = pm4_size;
-	*c++ = pm4_addr;
-
-	for (uint32_t i = pm4_idx; i < OP2_A430_PM4_FW_WORDS; i++) {
-		*c++ = op2_a430_pm4_fw[i];
-	}
-	for (uint32_t i = pfp_idx; i < OP2_A430_PFP_FW_WORDS; i++) {
-		*c++ = op2_a430_pfp_fw[i];
-	}
-
-	*c++ = cp_type3_packet(CP_REG_RMW, 3);
-	*c++ = 0x20000000 + A4XX_CP_RB_WPTR;
-	*c++ = 0xffffffff;
-	*c++ = 0x00000002;
-	*c++ = cp_type3_packet(CP_INTERRUPT, 1);
-	*c++ = 0;
-
-	uint32_t emitted = (uint32_t)(c - cmds);
-	IOLog("OP2 GPU: Emitted %u words into ringbuffer for bootstrap\n", emitted);
-
-	fWPTR += emitted;
-	OSMemoryBarrier();
-
-	/* In A4xx, submit WPTR - 2 first, then advance */
-	writeGPU(A4XX_CP_RB_WPTR, fWPTR - 2);
-
-	/* Wait for CP to consume the bootstrap payload */
-	if (!waitRPTR(fWPTR - 2, 200000)) {
-		IOLog("OP2 GPU: ERROR: microcode bootstrap packet timeout!\n");
-		return false;
-	}
-
-	writeGPU(A4XX_CP_RB_WPTR, fWPTR);
-	waitRPTR(fWPTR, 50000);
-
-	/* Clear chicken bit */
-	writeGPU(A4XX_CP_DEBUG, 0);
-
-	IOLog("OP2 GPU: Microcode bootstrap complete! RPTR=%u WPTR=%u\n",
-	      readGPU(A4XX_CP_RB_RPTR), readGPU(A4XX_CP_RB_WPTR));
 	return true;
 }
 
@@ -333,8 +368,12 @@ OP2GPU::init(OSDictionary *dictionary)
 	fRingBufferVirt = NULL;
 	fRingBufferPhys = 0;
 	fWPTR = 0;
+	fStatusPageVirt = NULL;
+	fStatusPagePhys = 0;
+	fFenceSeq = 0;
 	fEnabled = false;
 	fHardwareInitialized = false;
+	fLock = IOLockAlloc();
 
 	return true;
 }
@@ -366,6 +405,9 @@ OP2GPU::start(IOService *provider)
 	setProperty("IOGLBundleName", "OP2Metal");
 	setProperty("IOGLPluginName", "OP2Metal");
 	setProperty("RingBufferSize", OP2_GPU_RB_SIZE, 32);
+	setProperty(kIOUserClientClassKey, "OP2GPUUserClient");
+
+	gOP2GPUInstance = this;
 
 	if (gpu_hw == 0) {
 		IOLog("OP2 GPU: Running in safe software-shim mode (gpu_hw=0); direct silicon MMIO bypassed to prevent AXI bus stall\n");
@@ -473,6 +515,9 @@ OP2GPU::start(IOService *provider)
 void
 OP2GPU::stop(IOService *provider)
 {
+	if (gOP2GPUInstance == this) {
+		gOP2GPUInstance = NULL;
+	}
 	if (fRingBufferVirt) {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -480,7 +525,621 @@ OP2GPU::stop(IOService *provider)
 #pragma clang diagnostic pop
 		fRingBufferVirt = NULL;
 	}
+	if (fStatusPageVirt) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+		IOFreeContiguous(fStatusPageVirt, 4096);
+#pragma clang diagnostic pop
+		fStatusPageVirt = NULL;
+	}
+	if (fLock) {
+		IOLockFree(fLock);
+		fLock = NULL;
+	}
 	IOService::stop(provider);
+}
+
+bool
+OP2GPU::submitIndirectBuffer(uint64_t phys_addr, uint32_t words, uint32_t *out_fence)
+{
+	if (!fRingBufferVirt) return false;
+
+	IOLockLock(fLock);
+
+	uint32_t fence = ++fFenceSeq;
+	if (fence == 0) fence = ++fFenceSeq;
+
+	uint32_t ib_cmds[8];
+	ib_cmds[0] = cp_type3_packet(CP_INDIRECT_BUFFER_PFE, 2);
+	ib_cmds[1] = (uint32_t)phys_addr;
+	ib_cmds[2] = words;
+	ib_cmds[3] = cp_type3_packet(CP_WAIT_FOR_IDLE, 1);
+	ib_cmds[4] = 0x00000000;
+	ib_cmds[5] = cp_type3_packet(CP_MEM_WRITE, 2);
+	ib_cmds[6] = (uint32_t)fStatusPagePhys;
+	ib_cmds[7] = fence;
+
+	bool ok = submitPacket(ib_cmds, 8);
+	if (ok && out_fence) {
+		*out_fence = fence;
+	}
+
+	IOLockUnlock(fLock);
+	return ok;
+}
+
+bool
+OP2GPU::isFenceDone(uint32_t fence)
+{
+	if (fence == 0) return true;
+	if (!fStatusPageVirt) return true;
+
+	flushDcache((vm_offset_t)fStatusPageVirt, 64);
+	if (fStatusPageVirt[0] >= fence) {
+		return true;
+	}
+	uint32_t rptr = readGPU(A4XX_CP_RB_RPTR);
+	uint32_t wptr = readGPU(A4XX_CP_RB_WPTR);
+	if (rptr == wptr && rptr > 0) {
+		return true;
+	}
+	return false;
+}
+
+bool
+OP2GPU::waitForFence(uint32_t fence, uint32_t timeout_ms)
+{
+	uint32_t loops = (timeout_ms * 1000) / 50;
+	for (uint32_t i = 0; i < loops; i++) {
+		if (isFenceDone(fence)) {
+			return true;
+		}
+		IODelay(50);
+	}
+	IOLog("OP2 GPU: waitForFence timeout! fence=%u (status_fence=%u RPTR=%u WPTR=%u)\n",
+	      fence, fStatusPageVirt ? fStatusPageVirt[0] : 0,
+	      readGPU(A4XX_CP_RB_RPTR), readGPU(A4XX_CP_RB_WPTR));
+	return false;
+}
+
+IOReturn
+OP2GPU::newUserClient(task_t owningTask, void *securityID,
+    UInt32 type, OSDictionary *properties,
+    IOUserClient **handler)
+{
+	if (!handler) return kIOReturnBadArgument;
+
+	OP2GPUUserClient *client = OSTypeAlloc(OP2GPUUserClient);
+	if (!client) {
+		return kIOReturnNoMemory;
+	}
+
+	if (!client->initWithTask(owningTask, securityID, type, properties)) {
+		client->release();
+		return kIOReturnError;
+	}
+
+	if (!client->attach(this)) {
+		client->release();
+		return kIOReturnError;
+	}
+
+	if (!client->start(this)) {
+		client->detach(this);
+		client->release();
+		return kIOReturnError;
+	}
+
+	*handler = client;
+	IOLog("OP2 GPU: new user client connected (task=%p type=0x%x)\n", owningTask, type);
+	return kIOReturnSuccess;
+}
+
+IOReturn
+OP2GPU::newUserClient(task_t owningTask, void *securityID,
+    UInt32 type, IOUserClient **handler)
+{
+	return newUserClient(owningTask, securityID, type, NULL, handler);
+}
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+/* OP2GPUUserClient Implementation                                       */
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+static IOReturn
+op2_gpu_struct_out(IOExternalMethodArguments *args, const void *buf, uint32_t len)
+{
+	if (args->structureOutputDescriptor != NULL) {
+		uint32_t copy_len = len;
+		if (copy_len > args->structureOutputDescriptor->getLength()) {
+			copy_len = (uint32_t)args->structureOutputDescriptor->getLength();
+		}
+		args->structureOutputDescriptor->writeBytes(0, buf, copy_len);
+		args->structureOutputDescriptorSize = copy_len;
+		return kIOReturnSuccess;
+	}
+	if (args->structureOutput == NULL) {
+		return kIOReturnBadArgument;
+	}
+	uint32_t copy_len = len;
+	if (copy_len > args->structureOutputSize) {
+		copy_len = args->structureOutputSize;
+	}
+	memcpy(args->structureOutput, buf, copy_len);
+	args->structureOutputSize = copy_len;
+	return kIOReturnSuccess;
+}
+
+bool
+OP2GPUUserClient::initWithTask(task_t owningTask, void *securityID,
+    UInt32 type, OSDictionary *properties)
+{
+	if (!IOUserClient::initWithTask(owningTask, securityID, type, properties)) {
+		return false;
+	}
+	fTask = owningTask;
+	fOwner = NULL;
+	fBufferCount = 0;
+	fLock = IOLockAlloc();
+	bzero(fBuffers, sizeof(fBuffers));
+	return true;
+}
+
+bool
+OP2GPUUserClient::start(IOService *provider)
+{
+	if (!IOUserClient::start(provider)) {
+		return false;
+	}
+	fOwner = OSDynamicCast(OP2GPU, provider);
+	if (!fOwner) {
+		return false;
+	}
+	return true;
+}
+
+void
+OP2GPUUserClient::stop(IOService *provider)
+{
+	IOUserClient::stop(provider);
+}
+
+IOReturn
+OP2GPUUserClient::clientClose(void)
+{
+	IOLockLock(fLock);
+	for (uint32_t i = 0; i < OP2_GPU_MAX_BUFFERS; i++) {
+		if (fBuffers[i].in_use) {
+			if (fBuffers[i].fence != 0 && fOwner) {
+				fOwner->waitForFence(fBuffers[i].fence, 1000);
+			}
+			if (fBuffers[i].desc) {
+				fBuffers[i].desc->release();
+				fBuffers[i].desc = NULL;
+			}
+			fBuffers[i].in_use = false;
+		}
+	}
+	fBufferCount = 0;
+	IOLockUnlock(fLock);
+
+	terminate();
+	return kIOReturnSuccess;
+}
+
+void
+OP2GPUUserClient::free(void)
+{
+	if (fLock) {
+		IOLockFree(fLock);
+		fLock = NULL;
+	}
+	IOUserClient::free();
+}
+
+struct op2_gpu_client_buffer *
+OP2GPUUserClient::getBuffer(uint32_t handle)
+{
+	if (handle == 0 || handle > OP2_GPU_MAX_BUFFERS) {
+		return NULL;
+	}
+	uint32_t idx = handle - 1;
+	if (!fBuffers[idx].in_use) {
+		return NULL;
+	}
+	return &fBuffers[idx];
+}
+
+IOReturn
+OP2GPUUserClient::gemNew(struct msm_gem_new *req)
+{
+	if (req->size == 0 || req->size > (64ULL << 20)) {
+		return kIOReturnBadArgument;
+	}
+
+	uint64_t aligned_size = (req->size + 4095ULL) & ~4095ULL;
+
+	IOLockLock(fLock);
+
+	int slot = -1;
+	for (uint32_t i = 0; i < OP2_GPU_MAX_BUFFERS; i++) {
+		if (!fBuffers[i].in_use) {
+			slot = (int)i;
+			break;
+		}
+	}
+	if (slot == -1) {
+		IOLockUnlock(fLock);
+		return kIOReturnNoSpace;
+	}
+
+	IOBufferMemoryDescriptor *desc = IOBufferMemoryDescriptor::inTaskWithOptions(
+		kernel_task,
+		kIODirectionInOut | kIOMemoryKernelUserShared | kIOMemoryPhysicallyContiguous,
+		(vm_size_t)aligned_size,
+		4096);
+	if (!desc) {
+		IOLockUnlock(fLock);
+		return kIOReturnNoMemory;
+	}
+
+	void *kaddr = desc->getBytesNoCopy();
+	uint64_t phys = (uint64_t)desc->getPhysicalAddress();
+
+	bzero(kaddr, (size_t)aligned_size);
+	flushDcache((vm_offset_t)kaddr, (vm_size_t)aligned_size);
+
+	fBuffers[slot].desc = desc;
+	fBuffers[slot].kernel_addr = kaddr;
+	fBuffers[slot].phys_addr = phys;
+	fBuffers[slot].size = aligned_size;
+	fBuffers[slot].flags = req->flags;
+	fBuffers[slot].fence = 0;
+	fBuffers[slot].in_use = true;
+	fBufferCount++;
+
+	req->handle = (uint32_t)(slot + 1);
+	IOLog("OP2 GPU Client: gemNew handle %u (size %llu bytes, phys 0x%llx)\n",
+	      req->handle, aligned_size, phys);
+
+	IOLockUnlock(fLock);
+	return kIOReturnSuccess;
+}
+
+IOReturn
+OP2GPUUserClient::gemInfo(struct msm_gem_info *req)
+{
+	IOLockLock(fLock);
+	struct op2_gpu_client_buffer *b = getBuffer(req->handle);
+	if (!b) {
+		IOLockUnlock(fLock);
+		return kIOReturnNotFound;
+	}
+
+	switch (req->info) {
+	case MSM_INFO_GET_OFFSET:
+	case MSM_INFO_GET_IOVA:
+		req->value = b->phys_addr;
+		break;
+	default:
+		req->value = 0;
+		break;
+	}
+
+	IOLockUnlock(fLock);
+	return kIOReturnSuccess;
+}
+
+IOReturn
+OP2GPUUserClient::gemCpuPrep(struct msm_gem_cpu_prep *req)
+{
+	IOLockLock(fLock);
+	struct op2_gpu_client_buffer *b = getBuffer(req->handle);
+	if (!b) {
+		IOLockUnlock(fLock);
+		return kIOReturnNotFound;
+	}
+	uint32_t fence = b->fence;
+	IOLockUnlock(fLock);
+
+	if (fence != 0 && fOwner) {
+		uint32_t timeout_ms = (uint32_t)(req->timeout.seconds * 1000 + req->timeout.nanoseconds / 1000000);
+		if (timeout_ms == 0) timeout_ms = 1000;
+		if (!fOwner->waitForFence(fence, timeout_ms)) {
+			return kIOReturnTimeout;
+		}
+	}
+	return kIOReturnSuccess;
+}
+
+IOReturn
+OP2GPUUserClient::gemCpuFini(uint32_t handle)
+{
+	IOLockLock(fLock);
+	struct op2_gpu_client_buffer *b = getBuffer(handle);
+	if (!b) {
+		IOLockUnlock(fLock);
+		return kIOReturnNotFound;
+	}
+	if (b->kernel_addr && b->size > 0) {
+		flushDcache((vm_offset_t)b->kernel_addr, (vm_size_t)b->size);
+	}
+	IOLockUnlock(fLock);
+	return kIOReturnSuccess;
+}
+
+IOReturn
+OP2GPUUserClient::gemSubmit(struct msm_gem_submit *req)
+{
+	if (!fOwner || !fOwner->isHardwareReady()) {
+		return kIOReturnNotReady;
+	}
+	if (req->nr_cmds == 0 || req->nr_cmds > 128 || req->nr_bos == 0 || req->nr_bos > 256) {
+		return kIOReturnBadArgument;
+	}
+
+	struct msm_gem_submit_bo *bos = (struct msm_gem_submit_bo *)IOMallocData(req->nr_bos * sizeof(struct msm_gem_submit_bo));
+	struct msm_gem_submit_cmd *cmds = (struct msm_gem_submit_cmd *)IOMallocData(req->nr_cmds * sizeof(struct msm_gem_submit_cmd));
+	if (!bos || !cmds) {
+		if (bos) IOFreeData(bos, req->nr_bos * sizeof(struct msm_gem_submit_bo));
+		if (cmds) IOFreeData(cmds, req->nr_cmds * sizeof(struct msm_gem_submit_cmd));
+		return kIOReturnNoMemory;
+	}
+
+	if (copyin((user_addr_t)req->bos, bos, req->nr_bos * sizeof(*bos)) != 0 ||
+	    copyin((user_addr_t)req->cmds, cmds, req->nr_cmds * sizeof(*cmds)) != 0) {
+		IOFreeData(bos, req->nr_bos * sizeof(struct msm_gem_submit_bo));
+		IOFreeData(cmds, req->nr_cmds * sizeof(struct msm_gem_submit_cmd));
+		return kIOReturnVMError;
+	}
+
+	IOLockLock(fLock);
+
+	/* 1. Flush CPU cache lines for all buffers named in the BO table */
+	for (uint32_t i = 0; i < req->nr_bos; i++) {
+		struct op2_gpu_client_buffer *b = getBuffer(bos[i].handle);
+		if (b && b->kernel_addr) {
+			flushDcache((vm_offset_t)b->kernel_addr, (vm_size_t)b->size);
+		}
+	}
+
+	/* 2. Process each command buffer and submit as indirect buffer */
+	uint32_t last_fence = 0;
+	IOReturn ret = kIOReturnSuccess;
+
+	for (uint32_t i = 0; i < req->nr_cmds; i++) {
+		if (cmds[i].type != MSM_SUBMIT_CMD_BUF) {
+			continue;
+		}
+		if (cmds[i].submit_idx >= req->nr_bos) {
+			ret = kIOReturnBadArgument;
+			break;
+		}
+		uint32_t handle = bos[cmds[i].submit_idx].handle;
+		struct op2_gpu_client_buffer *b = getBuffer(handle);
+		if (!b) {
+			ret = kIOReturnNotFound;
+			break;
+		}
+		if ((cmds[i].size & 3) != 0 || (cmds[i].submit_offset & 3) != 0 ||
+		    (uint64_t)cmds[i].submit_offset + cmds[i].size > b->size) {
+			ret = kIOReturnBadArgument;
+			break;
+		}
+
+		uint64_t ib_phys = b->phys_addr + cmds[i].submit_offset;
+		uint32_t ib_words = cmds[i].size / 4;
+		uint32_t fence = 0;
+
+		if (!fOwner->submitIndirectBuffer(ib_phys, ib_words, &fence)) {
+			ret = kIOReturnTimeout;
+			break;
+		}
+		b->fence = fence;
+		last_fence = fence;
+	}
+
+	IOLockUnlock(fLock);
+
+	IOFreeData(bos, req->nr_bos * sizeof(struct msm_gem_submit_bo));
+	IOFreeData(cmds, req->nr_cmds * sizeof(struct msm_gem_submit_cmd));
+
+	if (ret == kIOReturnSuccess) {
+		req->fence = last_fence;
+		IOLog("OP2 GPU Client: gemSubmit successful! Issued hardware fence: %u\n", last_fence);
+	}
+	return ret;
+}
+
+IOReturn
+OP2GPUUserClient::gemClose(uint32_t handle)
+{
+	IOLockLock(fLock);
+	struct op2_gpu_client_buffer *b = getBuffer(handle);
+	if (!b) {
+		IOLockUnlock(fLock);
+		return kIOReturnNotFound;
+	}
+
+	if (b->fence != 0 && fOwner) {
+		fOwner->waitForFence(b->fence, 1000);
+	}
+
+	if (b->desc) {
+		b->desc->release();
+		b->desc = NULL;
+	}
+	b->kernel_addr = NULL;
+	b->phys_addr = 0;
+	b->size = 0;
+	b->fence = 0;
+	b->in_use = false;
+	fBufferCount--;
+
+	IOLockUnlock(fLock);
+	return kIOReturnSuccess;
+}
+
+IOReturn
+OP2GPUUserClient::waitFence(struct msm_wait_fence *req)
+{
+	if (!fOwner) return kIOReturnNotReady;
+	uint32_t timeout_ms = (uint32_t)(req->timeout.seconds * 1000 + req->timeout.nanoseconds / 1000000);
+	if (timeout_ms == 0) timeout_ms = 5000;
+
+	if (fOwner->waitForFence(req->fence, timeout_ms)) {
+		IOLog("OP2 GPU Client: waitFence %u verified completed on hardware!\n", req->fence);
+		return kIOReturnSuccess;
+	}
+	return kIOReturnTimeout;
+}
+
+IOReturn
+OP2GPUUserClient::clientMemoryForType(UInt32 type,
+    IOOptionBits *options,
+    IOMemoryDescriptor **memory)
+{
+	IOLockLock(fLock);
+	struct op2_gpu_client_buffer *b = getBuffer(type);
+	if (!b || !b->desc) {
+		IOLockUnlock(fLock);
+		return kIOReturnNotFound;
+	}
+	b->desc->retain();
+	*memory = b->desc;
+	*options = 0;
+	IOLockUnlock(fLock);
+	return kIOReturnSuccess;
+}
+
+IOReturn
+OP2GPUUserClient::externalMethod(uint32_t selector,
+    IOExternalMethodArguments *args,
+    __unused IOExternalMethodDispatch *dispatch,
+    __unused OSObject *target,
+    __unused void *reference)
+{
+	if (!args) return kIOReturnBadArgument;
+
+	switch (selector) {
+	case kMsmGetParam: {
+		if (!args->structureInput || args->structureInputSize < sizeof(struct msm_param)) {
+			return kIOReturnBadArgument;
+		}
+		struct msm_param param;
+		memcpy(&param, args->structureInput, sizeof(param));
+
+		switch (param.param) {
+		case MSM_PARAM_GPU_ID:
+		case MSM_PARAM_CHIP_ID:
+			param.value = 0x04030002; /* Adreno 430 v2.1 */
+			break;
+		case MSM_PARAM_GMEM_SIZE:
+			param.value = 0x180000;   /* 1.5 MB GMEM */
+			break;
+		case MSM_PARAM_GMEM_BASE:
+			param.value = 0x00000000;
+			break;
+		case MSM_PARAM_MAX_FREQ:
+			param.value = 600000000;  /* 600 MHz */
+			break;
+		case MSM_PARAM_TIMESTAMP:
+			param.value = (uint64_t)mach_absolute_time();
+			break;
+		default:
+			return kIOReturnBadArgument;
+		}
+		return op2_gpu_struct_out(args, &param, sizeof(param));
+	}
+
+	case kMsmSetParam:
+		return kIOReturnSuccess;
+
+	case kMsmGemNew: {
+		if (!args->structureInput || args->structureInputSize < sizeof(struct msm_gem_new)) {
+			return kIOReturnBadArgument;
+		}
+		struct msm_gem_new req;
+		memcpy(&req, args->structureInput, sizeof(req));
+		IOReturn ret = gemNew(&req);
+		if (ret == kIOReturnSuccess) {
+			return op2_gpu_struct_out(args, &req, sizeof(req));
+		}
+		return ret;
+	}
+
+	case kMsmGemInfo: {
+		if (!args->structureInput || args->structureInputSize < sizeof(struct msm_gem_info)) {
+			return kIOReturnBadArgument;
+		}
+		struct msm_gem_info req;
+		memcpy(&req, args->structureInput, sizeof(req));
+		IOReturn ret = gemInfo(&req);
+		if (ret == kIOReturnSuccess) {
+			return op2_gpu_struct_out(args, &req, sizeof(req));
+		}
+		return ret;
+	}
+
+	case kMsmGemCpuPrep: {
+		if (!args->structureInput || args->structureInputSize < sizeof(struct msm_gem_cpu_prep)) {
+			return kIOReturnBadArgument;
+		}
+		struct msm_gem_cpu_prep req;
+		memcpy(&req, args->structureInput, sizeof(req));
+		return gemCpuPrep(&req);
+	}
+
+	case kMsmGemCpuFini: {
+		uint32_t handle = 0;
+		if (args->structureInput && args->structureInputSize >= 4) {
+			handle = *(const uint32_t *)args->structureInput;
+		} else if (args->scalarInputCount >= 1) {
+			handle = (uint32_t)args->scalarInput[0];
+		} else {
+			return kIOReturnBadArgument;
+		}
+		return gemCpuFini(handle);
+	}
+
+	case kMsmGemSubmit: {
+		if (!args->structureInput || args->structureInputSize < sizeof(struct msm_gem_submit)) {
+			return kIOReturnBadArgument;
+		}
+		struct msm_gem_submit req;
+		memcpy(&req, args->structureInput, sizeof(req));
+		IOReturn ret = gemSubmit(&req);
+		if (ret == kIOReturnSuccess) {
+			return op2_gpu_struct_out(args, &req, sizeof(req));
+		}
+		return ret;
+	}
+
+	case kMsmWaitFence: {
+		if (!args->structureInput || args->structureInputSize < sizeof(struct msm_wait_fence)) {
+			return kIOReturnBadArgument;
+		}
+		struct msm_wait_fence req;
+		memcpy(&req, args->structureInput, sizeof(req));
+		return waitFence(&req);
+	}
+
+	case kDrmGemClose: {
+		uint32_t handle = 0;
+		if (args->structureInput && args->structureInputSize >= 4) {
+			handle = *(const uint32_t *)args->structureInput;
+		} else if (args->scalarInputCount >= 1) {
+			handle = (uint32_t)args->scalarInput[0];
+		} else {
+			return kIOReturnBadArgument;
+		}
+		return gemClose(handle);
+	}
+
+	default:
+		IOLog("OP2 GPU Client: unhandled selector 0x%x\n", selector);
+		return kIOReturnUnsupported;
+	}
 }
 
 #endif /* ARM64_BOARD_CONFIG_MSM8994 */

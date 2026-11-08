@@ -16,7 +16,11 @@
 
 #if defined(ARM64_BOARD_CONFIG_MSM8994)
 #include <IOKit/IOService.h>
+#include <IOKit/IOUserClient.h>
+#include <IOKit/IOKitKeys.h>
 #include <IOKit/IOLib.h>
+#include <IOKit/IOLocks.h>
+#include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOMemoryDescriptor.h>
 
 /* Physical Base Addresses */
@@ -52,6 +56,19 @@
 #define A4XX_RBBM_STATUS                0x191
 #define A4XX_RBBM_POWER_STATUS          0x1b0
 #define A4XX_RBBM_WAIT_IDLE_CLOCKS_CTL2 0x1b8
+#define A4XX_RBBM_INT_0_STATUS          0x17d
+#define A4XX_RBBM_AHB_ERROR_STATUS      0x18f
+#define A4XX_CP_ME_STATUS               0x4d1
+
+/* VBIF Registers (Word Offsets) */
+#define A4XX_VBIF_GATE_OFF_WRREQ_EN     0x302a
+#define A4XX_VBIF_IN_RD_LIM_CONF0       0x302c
+#define A4XX_VBIF_IN_RD_LIM_CONF1       0x302d
+#define A4XX_VBIF_IN_WR_LIM_CONF0       0x3030
+#define A4XX_VBIF_IN_WR_LIM_CONF1       0x3031
+#define A4XX_VBIF_ROUND_ROBIN_QOS_ARB   0x3049
+#define A4XX_VBIF_XIN_HALT_CTRL0        0x3080
+#define A4XX_VBIF_XIN_HALT_CTRL1        0x3081
 
 #define A4XX_UCHE_CACHE_WAYS_VFD        0x384
 #define A4XX_UCHE_TRAP_BASE_LO          0x386
@@ -79,14 +96,110 @@
 #define CP_NOP                          0x10
 #define CP_REG_RMW                      0x21
 #define CP_INTERRUPT                    0x40
+#define CP_WAIT_FOR_IDLE                0x26
+#define CP_MEM_WRITE                    0x3d
+#define CP_INDIRECT_BUFFER_PFD          0x37
+#define CP_INDIRECT_BUFFER_PFE          0x3f
 #define CP_BOOTSTRAP_UCODE              0x6f
+#define CP_EVENT_WRITE                  0x46
 
 /* Ringbuffer Configuration */
 #define OP2_GPU_RB_SIZE                 (32 * 1024)     /* 32 KB */
 #define OP2_GPU_RB_DWORDS               (OP2_GPU_RB_SIZE / 4)
+#define OP2_GPU_MAX_BUFFERS             256
+
+/* DRM MSM Constants (Linux msm_drm.h ABI compatibility) */
+enum {
+	kDrmGemClose            = 0x09,
+	kMsmGetParam            = 0x40,
+	kMsmSetParam            = 0x41,
+	kMsmGemNew              = 0x42,
+	kMsmGemInfo             = 0x43,
+	kMsmGemCpuPrep          = 0x44,
+	kMsmGemCpuFini          = 0x45,
+	kMsmGemSubmit           = 0x46,
+	kMsmWaitFence           = 0x47,
+	kMsmGemMadvise          = 0x48,
+	kMsmSubmitQueueNew      = 0x4a,
+	kMsmSubmitQueueClose    = 0x4b,
+	kMsmSubmitQueueQuery    = 0x4c,
+	kOP2UserMemory          = 0x7d,
+	kOP2Surface             = 0x7e,
+	kOP2Show                = 0x7f,
+};
+
+#define MSM_PARAM_GPU_ID        0x01
+#define MSM_PARAM_GMEM_SIZE     0x02
+#define MSM_PARAM_CHIP_ID       0x03
+#define MSM_PARAM_MAX_FREQ      0x04
+#define MSM_PARAM_TIMESTAMP     0x05
+#define MSM_PARAM_GMEM_BASE     0x06
+
+#define MSM_INFO_GET_OFFSET     0x00
+#define MSM_INFO_GET_IOVA       0x01
+
+#define MSM_SUBMIT_CMD_BUF      0x01
+
+struct msm_param {
+	uint32_t pipe, param;
+	uint64_t value;
+	uint32_t len, pad;
+};
+
+struct msm_gem_new {
+	uint64_t size;
+	uint32_t flags, handle;
+};
+
+struct msm_gem_info {
+	uint32_t handle, info;
+	uint64_t value;
+	uint32_t len, pad;
+};
+
+struct msm_timespec {
+	int64_t seconds, nanoseconds;
+};
+
+struct msm_gem_cpu_prep {
+	uint32_t handle, op;
+	struct msm_timespec timeout;
+};
+
+struct msm_gem_submit_cmd {
+	uint32_t type, submit_idx, submit_offset, size, pad, nr_relocs;
+	uint64_t relocs;
+};
+
+struct msm_gem_submit_bo {
+	uint32_t flags, handle;
+	uint64_t presumed;
+};
+
+struct msm_gem_submit {
+	uint32_t flags, fence, nr_bos, nr_cmds;
+	uint64_t bos, cmds;
+	int32_t fence_fd;
+	uint32_t queueid;
+	uint64_t in_syncobjs, out_syncobjs;
+	uint32_t nr_in_syncobjs, nr_out_syncobjs, syncobj_stride, pad;
+};
+
+struct msm_wait_fence {
+	uint32_t fence, flags;
+	struct msm_timespec timeout;
+	uint32_t queueid;
+};
+
+struct drm_gem_close {
+	uint32_t handle, pad;
+};
+
+class OP2GPUUserClient;
 
 class OP2GPU : public IOService {
 	OSDeclareDefaultStructors(OP2GPU);
+	friend class OP2GPUUserClient;
 
 private:
 	vm_offset_t fMMSSBase;
@@ -96,8 +209,13 @@ private:
 	uint64_t    fRingBufferPhys;
 	uint32_t    fWPTR;
 
+	uint32_t   *fStatusPageVirt;
+	uint64_t    fStatusPagePhys;
+	uint32_t    fFenceSeq;
+
 	bool        fEnabled;
 	bool        fHardwareInitialized;
+	IOLock     *fLock;
 
 	void        writeMMSS(uint32_t byte_offset, uint32_t val);
 	uint32_t    readMMSS(uint32_t byte_offset);
@@ -119,6 +237,67 @@ public:
 	virtual bool init(OSDictionary *dictionary = NULL) APPLE_KEXT_OVERRIDE;
 	virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
 	virtual void stop(IOService *provider) APPLE_KEXT_OVERRIDE;
+
+	virtual IOReturn newUserClient(task_t owningTask, void *securityID,
+	    UInt32 type, OSDictionary *properties,
+	    IOUserClient **handler) APPLE_KEXT_OVERRIDE;
+	virtual IOReturn newUserClient(task_t owningTask, void *securityID,
+	    UInt32 type, IOUserClient **handler) APPLE_KEXT_OVERRIDE;
+
+	bool submitIndirectBuffer(uint64_t phys_addr, uint32_t words, uint32_t *out_fence);
+	bool waitForFence(uint32_t fence, uint32_t timeout_ms);
+	bool isFenceDone(uint32_t fence);
+	bool isHardwareReady(void) const { return fHardwareInitialized; }
+
+	static OP2GPU *getInstance(void);
+};
+
+struct op2_gpu_client_buffer {
+	IOBufferMemoryDescriptor *desc;
+	void                     *kernel_addr;
+	uint64_t                  phys_addr;
+	uint64_t                  size;
+	uint32_t                  flags;
+	uint32_t                  fence;
+	bool                      in_use;
+};
+
+class OP2GPUUserClient : public IOUserClient {
+	OSDeclareDefaultStructors(OP2GPUUserClient);
+
+private:
+	task_t                   fTask;
+	OP2GPU                  *fOwner;
+	IOLock                  *fLock;
+	op2_gpu_client_buffer    fBuffers[OP2_GPU_MAX_BUFFERS];
+	uint32_t                 fBufferCount;
+
+	struct op2_gpu_client_buffer *getBuffer(uint32_t handle);
+	IOReturn gemNew(struct msm_gem_new *req);
+	IOReturn gemInfo(struct msm_gem_info *req);
+	IOReturn gemCpuPrep(struct msm_gem_cpu_prep *req);
+	IOReturn gemCpuFini(uint32_t handle);
+	IOReturn gemSubmit(struct msm_gem_submit *req);
+	IOReturn gemClose(uint32_t handle);
+	IOReturn waitFence(struct msm_wait_fence *req);
+
+public:
+	virtual bool initWithTask(task_t owningTask, void *securityID,
+	    UInt32 type, OSDictionary *properties) APPLE_KEXT_OVERRIDE;
+	virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
+	virtual void stop(IOService *provider) APPLE_KEXT_OVERRIDE;
+	virtual IOReturn clientClose(void) APPLE_KEXT_OVERRIDE;
+	virtual void free(void) APPLE_KEXT_OVERRIDE;
+
+	virtual IOReturn clientMemoryForType(UInt32 type,
+	    IOOptionBits *options,
+	    IOMemoryDescriptor **memory) APPLE_KEXT_OVERRIDE;
+
+	virtual IOReturn externalMethod(uint32_t selector,
+	    IOExternalMethodArguments *args,
+	    IOExternalMethodDispatch *dispatch,
+	    OSObject *target,
+	    void *reference) APPLE_KEXT_OVERRIDE;
 };
 
 #endif /* ARM64_BOARD_CONFIG_MSM8994 */

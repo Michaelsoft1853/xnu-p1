@@ -26,6 +26,7 @@
  * CPU starvation.
  */
 #include "OP2Surface.h"
+#include "OP2GPU.h"
 
 #if defined(ARM64_BOARD_CONFIG_MSM8994)
 #include <IOKit/IOService.h>
@@ -116,8 +117,33 @@ OSDefineMetaClassAndStructors(IOAcceleratorES, IOService);
 
 class AGXAccelerator : public IOAcceleratorES {
 	OSDeclareDefaultStructors(AGXAccelerator);
+public:
+	virtual IOReturn newUserClient(task_t owningTask, void *securityID,
+	    UInt32 type, OSDictionary *properties,
+	    IOUserClient **handler) APPLE_KEXT_OVERRIDE;
+	virtual IOReturn newUserClient(task_t owningTask, void *securityID,
+	    UInt32 type, IOUserClient **handler) APPLE_KEXT_OVERRIDE;
 };
 OSDefineMetaClassAndStructors(AGXAccelerator, IOAcceleratorES);
+
+IOReturn
+AGXAccelerator::newUserClient(task_t owningTask, void *securityID,
+    UInt32 type, OSDictionary *properties,
+    IOUserClient **handler)
+{
+	OP2GPU *gpu = OP2GPU::getInstance();
+	if (gpu) {
+		return gpu->newUserClient(owningTask, securityID, type, properties, handler);
+	}
+	return kIOReturnNotReady;
+}
+
+IOReturn
+AGXAccelerator::newUserClient(task_t owningTask, void *securityID,
+    UInt32 type, IOUserClient **handler)
+{
+	return newUserClient(owningTask, securityID, type, NULL, handler);
+}
 
 class IOMobileFramebuffer : public IOService {
 	OSDeclareDefaultStructors(IOMobileFramebuffer);
@@ -468,6 +494,7 @@ AppleCLCD::start(IOService *provider)
 			} else {
 				IOLog("OP2 FB: published IOAcceleratorES/AGXAccelerator (metal plug-in disabled)\n");
 			}
+			accelerator->setProperty(kIOUserClientClassKey, "OP2GPUUserClient");
 			accelerator->registerService();
 		}
 		accelerator->release();
