@@ -404,14 +404,12 @@ OP2CPU::startAll(void *arg __unused, wait_result_t result __unused)
 extern "C" void
 op2_cpu_dump_status(void)
 {
-	/* kprintf, not IOLog: the deadline dump runs with interrupts
-	 * disabled and IOLog asserts there (run177 ate this block). */
-	kprintf("OP2 CPU STATUS: registered=%u\n",
+	printf("OP2 CPU STATUS: registered=%u\n",
 	    __atomic_load_n(&op2_cpus_registered, __ATOMIC_ACQUIRE));
 	for (uint32_t i = 0; i < OP2_MAX_CPUS; i++) {
 		OP2CPU *cpu = __atomic_load_n(&op2_cpus[i], __ATOMIC_ACQUIRE);
 		if (cpu != NULL) {
-			kprintf("OP2 CPU STATUS: cpu%u online=%u\n", i,
+			printf("OP2 CPU STATUS: cpu%u online=%u\n", i,
 			    __atomic_load_n(&op2_ap_online[i], __ATOMIC_ACQUIRE));
 		}
 	}

@@ -911,6 +911,7 @@ void op2_secondary_cpu_init(void)
 	op2_vtimer_enable();
 	op2_ramoops_ap_write("APG5\n");
 
-	kprintf("OP2: Secondary CPU 1 initialized GICv2 and vtimer\n");
+	uint32_t cpu_id = cpu_number();
+	kprintf("OP2: Secondary CPU %u initialized GICv2 and vtimer\n", cpu_id);
 }
 #endif

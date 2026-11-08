@@ -730,6 +730,39 @@ AppleCLCD::present(const uint8_t *rec)
 		target_id = sLastPresentedID;
 	}
 
+	if (target_id == 0 && fClientUI) {
+		/*
+		 * GPU-less or early swap policy: if swap record had no target
+		 * surface, scan for an active client surface with non-zero pixels.
+		 */
+		OP2Surface *best = NULL;
+		uint32_t best_nz = 100;
+		for (uint32_t sid = 2; sid < 64; sid++) {
+			OP2Surface *cand = op2_surface_copy(sid);
+			if (cand == NULL) {
+				continue;
+			}
+			if (cand->width >= 1000 && cand->height >= 1000) {
+				uint32_t nz = op2_fb_sample_nz(cand, 5000);
+				if (nz > best_nz) {
+					best_nz = nz;
+					if (best != NULL) {
+						best->release();
+					}
+					best = cand;
+					cand = NULL;
+				}
+			}
+			if (cand != NULL) {
+				cand->release();
+			}
+		}
+		if (best != NULL) {
+			target_id = best->id;
+			best->release();
+		}
+	}
+
 	if (target_id == 0) {
 		/* No layer resolved: mask parsing may be wrong for this userland. */
 		if (++op2_fb_present_no_target <= 4 || (op2_fb_present_no_target % 60) == 0) {
@@ -921,14 +954,13 @@ op2_fb_dump_stats(void)
 			samples++;
 		}
 	}
-	kprintf("OP2 FB STATS: presents=%llu kicks=%llu shown=%u panel=%ux%u panel_nz=%u/%u lastnz=%u\n",
+	printf("OP2 FB STATS: presents=%llu kicks=%llu shown=%u panel=%ux%u panel_nz=%u/%u lastnz=%u\n",
 	    presents, kicks, shown, w, h, panel_nz, samples, op2_fb_last_nz);
-	/* NOTE: kernel kprintf silently drops width-modified hex (%02x/%03x
-	 * proved silent across loops 6-9); decimal-only below. */
-	kprintf("OP2 FB LAST begin rec=%llu size=%u\n",
+	/* Output directly via printf to be captured in persistent ramoops buffer */
+	printf("OP2 FB LAST begin rec=%llu size=%u\n",
 	    op2_fb_last_pc, (uint32_t)sizeof(op2_fb_last_rec));
 	for (uint32_t off = 0; off + 16 <= (uint32_t)sizeof(op2_fb_last_rec); off += 16) {
-		kprintf("OP2 FB LAST %u: %u %u %u %u %u %u %u %u %u %u %u %u %u %u %u %u\n",
+		printf("OP2 FB LAST %u: %u %u %u %u %u %u %u %u %u %u %u %u %u %u %u %u\n",
 		    off,
 		    op2_fb_last_rec[off+0], op2_fb_last_rec[off+1],
 		    op2_fb_last_rec[off+2], op2_fb_last_rec[off+3],
@@ -939,7 +971,7 @@ op2_fb_dump_stats(void)
 		    op2_fb_last_rec[off+12], op2_fb_last_rec[off+13],
 		    op2_fb_last_rec[off+14], op2_fb_last_rec[off+15]);
 	}
-	kprintf("OP2 FB LAST end\n");
+	printf("OP2 FB LAST end\n");
 }
 
 bool
