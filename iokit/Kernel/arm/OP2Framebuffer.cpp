@@ -226,7 +226,6 @@ AppleCLCD::drawProgressBar(uint32_t percent)
 {
 	if (fPixels == 0) return;
 	uint8_t *fb = (uint8_t *)fPixels;
-	uint32_t stride_bgr = 3240; /* 1080 * 3 BGR888 */
 
 	int32_t bar_w = 440;
 	int32_t bar_h = 12;
@@ -244,7 +243,7 @@ AppleCLCD::drawProgressBar(uint32_t percent)
 
 	for (int32_t y = by0; y < by1; y++) {
 		if (y < 0 || y >= (int32_t)fHeight) continue;
-		uint8_t *row = fb + (uint32_t)y * stride_bgr;
+		uint32_t *row = (uint32_t *)(void *)(fb + (uint32_t)y * fRowBytes);
 		for (int32_t x = bx0; x < bx1; x++) {
 			if (x < 0 || x >= (int32_t)fWidth) continue;
 			bool inside = true;
@@ -259,13 +258,9 @@ AppleCLCD::drawProgressBar(uint32_t percent)
 			}
 			if (inside) {
 				if (x <= fill_x) {
-					row[x * 3 + 0] = 0xFF;
-					row[x * 3 + 1] = 0xFF;
-					row[x * 3 + 2] = 0xFF;
+					row[x] = 0xFFFFFFFFu;
 				} else {
-					row[x * 3 + 0] = 0x3C;
-					row[x * 3 + 1] = 0x3A;
-					row[x * 3 + 2] = 0x3A;
+					row[x] = 0xFF3A3A3Cu;
 				}
 			}
 		}
@@ -383,6 +378,23 @@ AppleCLCD::start(IOService *provider)
 			fWidth = lkSize & 0xffff;
 			fHeight = (lkSize >> 16) & 0xffff;
 		}
+
+		/*
+		 * Phase 8 MDP5 Direct Scanout: Reconfigure active pipe to 32bpp
+		 * XRGB/BGRA at fPhys with 4352-byte row stride.
+		 */
+		fActivePipe[0x00 / 4] = (fHeight << 16) | fWidth;
+		fActivePipe[0x04 / 4] = (fHeight << 16) | fWidth;
+		fActivePipe[0x08 / 4] = 0;
+		fActivePipe[0x0c / 4] = (fHeight << 16) | fWidth;
+		fActivePipe[0x10 / 4] = 0;
+		fActivePipe[0x14 / 4] = (uint32_t)fPhys;
+		fActivePipe[0x24 / 4] = fRowBytes;
+		fActivePipe[0x30 / 4] = 0x000236ffu;
+		fActivePipe[0x34 / 4] = 0x03020001u;
+		__asm__ volatile("dsb sy" ::: "memory");
+		IOLog("OP2 FB: reconfigured active pipe %s to 32bpp at 0x%llx (%ux%u stride=%u)\n",
+		    pipeName, fPhys, fWidth, fHeight, fRowBytes);
 	} else {
 		IOLog("OP2 FB: no active pipe found, configuring RGB0 on LM0\n");
 		fActivePipe = rgb0;
@@ -433,10 +445,9 @@ AppleCLCD::start(IOService *provider)
 	/* Render authentic Apple boot splash: pitch-black background with white Apple logo & progress bar */
 	if (fPixels != 0) {
 		uint8_t *fb = (uint8_t *)fPixels;
-		uint32_t stride_bgr = 3240; /* 1080 * 3 BGR888 */
 
 		/* 1. Deep pitch-black background */
-		bzero(fb, (size_t)fHeight * stride_bgr);
+		bzero(fb, (size_t)fHeight * fRowBytes);
 
 		/* 2. Official Apple Retina Boot Logo from ProgressUI (194x237 @3x) */
 		int32_t lx0 = (int32_t)(fWidth / 2) - (APPLE_LOGO_WIDTH / 2);   /* 540 - 97 = 443 */
@@ -445,16 +456,14 @@ AppleCLCD::start(IOService *provider)
 		for (int32_t ly = 0; ly < APPLE_LOGO_HEIGHT; ly++) {
 			int32_t y = ly0 + ly;
 			if (y < 0 || y >= (int32_t)fHeight) continue;
-			uint8_t *row = fb + (uint32_t)y * stride_bgr;
+			uint32_t *row = (uint32_t *)(void *)(fb + (uint32_t)y * fRowBytes);
 			const uint8_t *alpha_row = &apple_logo_alpha[ly * APPLE_LOGO_WIDTH];
 			for (int32_t lx = 0; lx < APPLE_LOGO_WIDTH; lx++) {
 				uint8_t a = alpha_row[lx];
 				if (a != 0) {
 					int32_t x = lx0 + lx;
 					if (x >= 0 && x < (int32_t)fWidth) {
-						row[x * 3 + 0] = a;
-						row[x * 3 + 1] = a;
-						row[x * 3 + 2] = a;
+						row[x] = (0xFFu << 24) | ((uint32_t)a << 16) | ((uint32_t)a << 8) | (uint32_t)a;
 					}
 				}
 			}
@@ -532,12 +541,11 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
 	if ((count % 3600) == 0 && op2_fb_instance != NULL &&
 	    op2_fb_instance->fPixels != 0) {
 		uint32_t tl_nz = 0, tl_n = 0;
-		uint8_t *px = (uint8_t *)op2_fb_instance->fPixels;
+		const uint32_t *px = (const uint32_t *)op2_fb_instance->fPixels;
 		uint64_t total = (uint64_t)op2_fb_instance->fWidth *
 		    (uint64_t)op2_fb_instance->fHeight;
 		for (uint64_t i = 0; i < total && tl_n < 2000; i += 997) {
-			uint8_t *p = px + i * 3;
-			if (p[0] | p[1] | p[2]) {
+			if ((px[i] & 0x00FFFFFFu) != 0) {
 				tl_nz++;
 			}
 			tl_n++;
@@ -865,51 +873,79 @@ AppleCLCD::present(const uint8_t *rec)
 		return;
 	}
 
-	uintptr_t src = s->kernelAddress();
-	uint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;
+	uint64_t direct_phys = 0;
+	IOPhysicalLength segLen = 0;
+	if (s->memory != NULL) {
+		direct_phys = (uint64_t)s->memory->getPhysicalSegment(0, &segLen);
+	}
 
-	if (src != 0 && bpe == 4) {
-		if (s->width == 1242 && s->height == 2208) {
-			/* Fast Retina downsample with precomputed X map: 1 division per row, zero divisions per pixel */
-			static uint32_t sx_map[1080];
-			static bool sx_map_ready = false;
-			if (!sx_map_ready) {
-				for (int32_t x = 0; x < 1080; x++) {
-					sx_map[x] = (uint32_t)(((uint64_t)x * 1242) / 1080);
-				}
-				sx_map_ready = true;
+	if (direct_phys != 0 && segLen >= (uint64_t)s->bytesPerRow * s->height &&
+	    s->width == fWidth && s->height == fHeight && fActivePipe != NULL) {
+		/*
+		 * Phase 8 ZERO-COPY HARDWARE DIRECT SCANOUT:
+		 * Surface is physically contiguous in hardware DMA memory.
+		 * Point MDP5 hardware pipe directly to the surface's physical address.
+		 */
+		static uint64_t s_last_direct_phys = 0;
+		if (direct_phys != s_last_direct_phys) {
+			s_last_direct_phys = direct_phys;
+			fActivePipe[0x14 / 4] = (uint32_t)direct_phys;
+			fActivePipe[0x24 / 4] = s->bytesPerRow;
+			fActivePipe[0x00 / 4] = (s->height << 16) | s->width;
+			fActivePipe[0x04 / 4] = (s->height << 16) | s->width;
+			fActivePipe[0x30 / 4] = 0x000236ffu;
+			fActivePipe[0x34 / 4] = 0x03020001u;
+			if (pc <= 4 || (pc % 60) == 0) {
+				IOLog("OP2 FB: direct hardware scanout surf %u at 0x%llx (%ux%u stride %u)\n",
+				    shown_id, direct_phys, s->width, s->height, s->bytesPerRow);
 			}
-			uint64_t last_retina = (uint64_t)s->offset + (uint64_t)2207 * s->bytesPerRow + (uint64_t)1242 * 4;
-			if (s->memory != NULL && last_retina <= s->memory->getLength()) {
-				for (int32_t y = 0; y < (int32_t)fHeight; y++) {
-					uint32_t sy_coord = ((uint64_t)y * 2208) / 1920;
-					const uint32_t *src_row = (const uint32_t *)(src + s->offset + (uint64_t)sy_coord * s->bytesPerRow);
-					uint8_t *dst_row = (uint8_t *)(fPixels + (uint64_t)y * 3240);
-					for (int32_t x = 0; x < (int32_t)fWidth; x++) {
-						uint32_t p = src_row[sx_map[x]];
-						dst_row[x * 3 + 0] = p & 0xff;
-						dst_row[x * 3 + 1] = (p >> 8) & 0xff;
-						dst_row[x * 3 + 2] = (p >> 16) & 0xff;
+		}
+	} else {
+		/* Fallback: fast 32bpp memory copy / downsample into fPixels at fPhys */
+		if (fActivePipe != NULL && fActivePipe[0x14 / 4] != (uint32_t)fPhys) {
+			fActivePipe[0x14 / 4] = (uint32_t)fPhys;
+			fActivePipe[0x24 / 4] = fRowBytes;
+			fActivePipe[0x00 / 4] = (fHeight << 16) | fWidth;
+			fActivePipe[0x04 / 4] = (fHeight << 16) | fWidth;
+			fActivePipe[0x30 / 4] = 0x000236ffu;
+			fActivePipe[0x34 / 4] = 0x03020001u;
+		}
+
+		uintptr_t src = s->kernelAddress();
+		uint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;
+		if (src != 0 && bpe == 4 && fPixels != 0) {
+			if (s->width == 1242 && s->height == 2208) {
+				static uint32_t sx_map[1080];
+				static bool sx_map_ready = false;
+				if (!sx_map_ready) {
+					for (int32_t x = 0; x < 1080; x++) {
+						sx_map[x] = (uint32_t)(((uint64_t)x * 1242) / 1080);
+					}
+					sx_map_ready = true;
+				}
+				uint64_t last_retina = (uint64_t)s->offset + (uint64_t)2207 * s->bytesPerRow + (uint64_t)1242 * 4;
+				if (s->memory != NULL && last_retina <= s->memory->getLength()) {
+					for (int32_t y = 0; y < (int32_t)fHeight; y++) {
+						uint32_t sy_coord = ((uint64_t)y * 2208) / 1920;
+						const uint32_t *src_row = (const uint32_t *)(src + s->offset + (uint64_t)sy_coord * s->bytesPerRow);
+						uint32_t *dst_row = (uint32_t *)(fPixels + (uint64_t)y * fRowBytes);
+						for (int32_t x = 0; x < (int32_t)fWidth; x++) {
+							dst_row[x] = src_row[sx_map[x]];
+						}
 					}
 				}
-			}
-		} else {
-			/* 1:1 copy into panel memory with 24bpp BGR888 */
-			int32_t w = (int32_t)s->width;
-			int32_t h = (int32_t)s->height;
-			if (w > (int32_t)fWidth) w = (int32_t)fWidth;
-			if (h > (int32_t)fHeight) h = (int32_t)fHeight;
-
-			uint64_t last = (uint64_t)s->offset + (uint64_t)(h - 1) * s->bytesPerRow + (uint64_t)w * 4;
-			if (w > 0 && h > 0 && s->memory != NULL && last <= s->memory->getLength()) {
-				for (int32_t y = 0; y < h; y++) {
-					const uint32_t *src_row = (const uint32_t *)(src + s->offset + (uint64_t)y * s->bytesPerRow);
-					uint8_t *dst_row = (uint8_t *)(fPixels + (uint64_t)y * 3240);
-					for (int32_t x = 0; x < w; x++) {
-						uint32_t p = src_row[x];
-						dst_row[x * 3 + 0] = p & 0xff;
-						dst_row[x * 3 + 1] = (p >> 8) & 0xff;
-						dst_row[x * 3 + 2] = (p >> 16) & 0xff;
+			} else {
+				int32_t w = (int32_t)s->width;
+				int32_t h = (int32_t)s->height;
+				if (w > (int32_t)fWidth) w = (int32_t)fWidth;
+				if (h > (int32_t)fHeight) h = (int32_t)fHeight;
+				uint64_t last = (uint64_t)s->offset + (uint64_t)(h - 1) * s->bytesPerRow + (uint64_t)w * 4;
+				if (w > 0 && h > 0 && s->memory != NULL && last <= s->memory->getLength()) {
+					uint32_t line_bytes = (uint32_t)w * 4;
+					for (int32_t y = 0; y < h; y++) {
+						const void *src_line = (const void *)(src + s->offset + (uint64_t)y * s->bytesPerRow);
+						void *dst_line = (void *)(fPixels + (uint64_t)y * fRowBytes);
+						memcpy(dst_line, src_line, line_bytes);
 					}
 				}
 			}
@@ -940,22 +976,23 @@ op2_fb_dump_stats(void)
 	uint32_t panel_nz = 0, samples = 0;
 	uint64_t presents = op2_fb_present_count, kicks = op2_fb_kick_count;
 	uint32_t shown = op2_fb_last_shown, w = 0, h = 0;
+	uint32_t active_phys = (op2_fb_instance != NULL && op2_fb_instance->fActivePipe != NULL) ?
+	    op2_fb_instance->fActivePipe[0x14 / 4] : 0;
 
 	if (op2_fb_instance != NULL && op2_fb_instance->fPixels != 0) {
 		w = op2_fb_instance->fWidth;
 		h = op2_fb_instance->fHeight;
-		uint8_t *px = (uint8_t *)op2_fb_instance->fPixels;
+		const uint32_t *px = (const uint32_t *)op2_fb_instance->fPixels;
 		uint64_t total = (uint64_t)w * h;
 		for (uint64_t i = 0; i < total && samples < 2000; i += 997) {
-			uint8_t *p = px + i * 3;
-			if (p[0] | p[1] | p[2]) {
+			if ((px[i] & 0x00FFFFFFu) != 0) {
 				panel_nz++;
 			}
 			samples++;
 		}
 	}
-	printf("OP2 FB STATS: presents=%llu kicks=%llu shown=%u panel=%ux%u panel_nz=%u/%u lastnz=%u\n",
-	    presents, kicks, shown, w, h, panel_nz, samples, op2_fb_last_nz);
+	printf("OP2 FB STATS: presents=%llu kicks=%llu shown=%u active_phys=0x%08x panel=%ux%u panel_nz=%u/%u lastnz=%u\n",
+	    presents, kicks, shown, active_phys, w, h, panel_nz, samples, op2_fb_last_nz);
 	/* Output directly via printf to be captured in persistent ramoops buffer */
 	printf("OP2 FB LAST begin rec=%llu size=%u\n",
 	    op2_fb_last_pc, (uint32_t)sizeof(op2_fb_last_rec));

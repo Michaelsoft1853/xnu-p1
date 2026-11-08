@@ -94,11 +94,66 @@ static uint64_t     op2_surface_wired;       /* bytes of buffer surfaces */
 
 OSDefineMetaClassAndStructors(OP2Surface, OSObject);
 
+/*
+ * Phase 8 MDP5 Direct Scanout Carveout Allocator:
+ * Slot 0 is reserved for AppleCLCD default surface (fPhys = 0x03400000).
+ * Slots 1..3 (0x03c00000, 0x04400000, 0x04c00000) are dynamically assigned
+ * to full-screen client display surfaces (1080x1920) so the MDP5 hardware
+ * can scan out directly via DMA without CPU memory copy.
+ */
+static bool op2_carveout_used[OP2_CARVEOUT_MAX_SLOTS] = { true, false, false, false };
+static IOLock *op2_carveout_lock = NULL;
+
+uint64_t
+op2_carveout_alloc_slot(void)
+{
+	if (op2_carveout_lock == NULL) {
+		IOLock *lock = IOLockAlloc();
+		if (!OSCompareAndSwapPtr(NULL, lock, &op2_carveout_lock)) {
+			IOLockFree(lock);
+		}
+	}
+	IOLockLock(op2_carveout_lock);
+	uint64_t phys = 0;
+	for (uint32_t i = 1; i < OP2_CARVEOUT_MAX_SLOTS; i++) {
+		if (!op2_carveout_used[i]) {
+			op2_carveout_used[i] = true;
+			phys = OP2_CARVEOUT_BASE + (uint64_t)i * OP2_CARVEOUT_SLOT_SIZE;
+			break;
+		}
+	}
+	IOLockUnlock(op2_carveout_lock);
+	return phys;
+}
+
+void
+op2_carveout_free_slot(uint64_t phys)
+{
+	if (phys < OP2_CARVEOUT_BASE ||
+	    phys >= OP2_CARVEOUT_BASE + OP2_CARVEOUT_SIZE ||
+	    op2_carveout_lock == NULL) {
+		return;
+	}
+	uint32_t slot = (uint32_t)((phys - OP2_CARVEOUT_BASE) / OP2_CARVEOUT_SLOT_SIZE);
+	if (slot >= 1 && slot < OP2_CARVEOUT_MAX_SLOTS) {
+		IOLockLock(op2_carveout_lock);
+		op2_carveout_used[slot] = false;
+		IOLockUnlock(op2_carveout_lock);
+	}
+}
+
 void
 OP2Surface::free()
 {
-	if (OSDynamicCast(IOBufferMemoryDescriptor, memory) != NULL) {
-		OSAddAtomic64(-(SInt64)allocSize, (volatile SInt64 *)&op2_surface_wired);
+	if (memory != NULL) {
+		IOPhysicalLength segLen = 0;
+		uint64_t phys = (uint64_t)memory->getPhysicalSegment(0, &segLen);
+		if (phys >= OP2_CARVEOUT_BASE + OP2_CARVEOUT_SLOT_SIZE &&
+		    phys < OP2_CARVEOUT_BASE + OP2_CARVEOUT_SIZE) {
+			op2_carveout_free_slot(phys);
+		} else if (OSDynamicCast(IOBufferMemoryDescriptor, memory) != NULL) {
+			OSAddAtomic64(-(SInt64)allocSize, (volatile SInt64 *)&op2_surface_wired);
+		}
 	}
 	OSSafeReleaseNULL(kernelMap);
 	OSSafeReleaseNULL(memory);
@@ -737,20 +792,49 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
 	s->parentID = args->scalarInputCount > 0 ? (uint32_t)args->scalarInput[0] : 0;
 	ret = op2_surface_layout(s, props);
 	if (ret == kIOReturnSuccess) {
-		IOBufferMemoryDescriptor *mem = NULL;
-		if ((uint64_t)OSAddAtomic64(s->allocSize, (volatile SInt64 *)&op2_surface_wired) +
-		    s->allocSize <= OP2_SURFACE_WIRED_MAX) {
-			mem = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
-			    kIODirectionInOut | kIOMemoryKernelUserShared, s->allocSize, page_size);
+		IOMemoryDescriptor *mem = NULL;
+		uint64_t carveout_phys = 0;
+
+		/*
+		 * Phase 8 MDP5 Direct Scanout Optimization:
+		 * If this is a full-screen display surface (1080x1920), allocate it
+		 * from the physical MDSS continuous splash carveout.
+		 */
+		if (s->width == 1080 && s->height == 1920 && s->allocSize <= OP2_CARVEOUT_SLOT_SIZE) {
+			carveout_phys = op2_carveout_alloc_slot();
 		}
-		if (mem == NULL) {
-			OSAddAtomic64(-(SInt64)s->allocSize, (volatile SInt64 *)&op2_surface_wired);
-			ret = kIOReturnNoMemory;
+
+		if (carveout_phys != 0) {
+			mem = IOMemoryDescriptor::withPhysicalAddress(carveout_phys, s->allocSize, kIODirectionInOut);
+			s->mapCache = kIOMapWriteCombineCache;
+			if (mem != NULL) {
+				s->kernelMap = mem->map(kIOMapWriteCombineCache);
+				if (s->kernelMap != NULL) {
+					s->kernelBuffer = (void *)s->kernelMap->getVirtualAddress();
+				}
+			}
+			IOLog("OP2 SURF: allocated carveout slot 0x%llx for surface %u (%ux%u)\n",
+			    carveout_phys, s->id, s->width, s->height);
 		} else {
-			bzero(mem->getBytesNoCopy(), s->allocSize);
+			if ((uint64_t)OSAddAtomic64(s->allocSize, (volatile SInt64 *)&op2_surface_wired) +
+			    s->allocSize <= OP2_SURFACE_WIRED_MAX) {
+				mem = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
+				    kIODirectionInOut | kIOMemoryKernelUserShared, s->allocSize, page_size);
+			}
+			if (mem == NULL) {
+				OSAddAtomic64(-(SInt64)s->allocSize, (volatile SInt64 *)&op2_surface_wired);
+				ret = kIOReturnNoMemory;
+			} else {
+				s->kernelBuffer = ((IOBufferMemoryDescriptor *)mem)->getBytesNoCopy();
+				s->mapCache = kIOMapDefaultCache;
+			}
+		}
+
+		if (mem != NULL) {
+			if (s->kernelBuffer != NULL) {
+				bzero(s->kernelBuffer, s->allocSize);
+			}
 			s->memory = mem;
-			s->kernelBuffer = mem->getBytesNoCopy();
-			s->mapCache = kIOMapDefaultCache;
 			if (!op2_surface_publish(s)) {
 				ret = kIOReturnNoResources;
 			}

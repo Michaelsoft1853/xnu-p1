@@ -63,6 +63,15 @@ uint32_t op2_surface_get_seed(OP2Surface *s);
 OP2Surface *op2_surface_create_physical(uint64_t phys, uint32_t width,
     uint32_t height, uint32_t bytesPerRow, uint32_t pixelFormat);
 
+/* Phase 8 MDP5 Direct Scanout Carveout Allocator */
+#define OP2_CARVEOUT_BASE             0x03400000ULL
+#define OP2_CARVEOUT_SIZE             (34ULL << 20) /* 34 MiB reserved by LK */
+#define OP2_CARVEOUT_SLOT_SIZE        (8ULL << 20)  /* 8 MiB per slot */
+#define OP2_CARVEOUT_MAX_SLOTS        4
+
+uint64_t op2_carveout_alloc_slot(void);
+void op2_carveout_free_slot(uint64_t phys);
+
 /* Send right for the surface in task (IOSurfaceLookupFromMachPort). */
 mach_port_name_t op2_surface_port_in_task(OP2Surface *surface, task_t task);
 
