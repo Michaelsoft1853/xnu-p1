@@ -13,4 +13,5 @@ iokit/Kernel/arm/OP2Surface.cpp					optional iokitcpp
 iokit/Kernel/arm/OP2Framebuffer.cpp				optional iokitcpp
 iokit/Kernel/arm/OP2Digitizer.cpp				optional iokitcpp
 iokit/Kernel/arm/OP2I2C.cpp					optional iokitcpp
+iokit/Kernel/arm/OP2GPU.cpp					optional iokitcpp
 
