@@ -1,6 +1,13 @@
 /*
- * OnePlus 2 (MSM8994) Internal eMMC 5.0 / SDHCI Persistent Root Device
- * Darwin/XNU Block Device Driver (read-only)
+ * OnePlus 2 (MSM8994) Internal eMMC 5.0 / SDHCI Persistent Storage Controller
+ * Darwin/XNU Block Device Driver
+ *
+ * Conditional Read/Write Capability:
+ * - Boot argument 'emmcrw=1' or 'rootrw=1' enables write operations.
+ * - Defaults to strict read-only safety mode if flags are absent to prevent
+ *   accidental partition corruption during early bring-up.
+ * - Features hardware CMD12 abort recovery, DAT0 busy line status polling,
+ *   and automatic 3x retries on CRC or timeout faults.
  */
 #if defined(ARM64_BOARD_CONFIG_MSM8994)
 #include <sys/param.h>
