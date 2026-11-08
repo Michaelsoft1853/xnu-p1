@@ -492,13 +492,16 @@ AppleCLCD::start(IOService *provider)
 	AGXAccelerator *accelerator = OSTypeAlloc(AGXAccelerator);
 	if (accelerator != NULL) {
 		if (accelerator->init() && accelerator->attach(this)) {
-			uint32_t metal = 0;
+			uint32_t metal = 2;
 			accelerator->setName("sgx");
-			if (PE_parse_boot_argn("metal", &metal, sizeof(metal)) && metal != 0) {
+			PE_parse_boot_argn("metal", &metal, sizeof(metal));
+			if (metal != 0) {
 				accelerator->setProperty("MetalPluginName", "OP2Metal");
 				accelerator->setProperty("MetalPluginClassName", "OP2MetalDevice");
 				accelerator->setProperty("IOGLBundleName", "OP2Metal");
 				accelerator->setProperty("IOGLPluginName", "OP2Metal");
+				accelerator->setProperty("IOGLESBundleName", "AGXGLDriver");
+				accelerator->setProperty("IOGLESMetalBundleName", "AGXGLDriver");
 				IOLog("OP2 FB: metal=%u: published IOAcceleratorES/AGXAccelerator naming OP2Metal\n", metal);
 			} else {
 				IOLog("OP2 FB: published IOAcceleratorES/AGXAccelerator (metal plug-in disabled)\n");

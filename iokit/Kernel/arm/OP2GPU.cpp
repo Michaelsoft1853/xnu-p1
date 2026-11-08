@@ -385,7 +385,7 @@ OP2GPU::start(IOService *provider)
 	if (!IOService::start(provider))
 		return false;
 
-	uint32_t gpu_arg = 0;
+	uint32_t gpu_arg = 1;
 	PE_parse_boot_argn("gpu", &gpu_arg, sizeof(gpu_arg));
 	if (gpu_arg == 0) {
 		IOLog("OP2 GPU: driver disabled (pass gpu=1 in boot-args to enable)\n");
@@ -393,7 +393,7 @@ OP2GPU::start(IOService *provider)
 		return true;
 	}
 
-	uint32_t gpu_hw = 0;
+	uint32_t gpu_hw = 1;
 	PE_parse_boot_argn("gpu_hw", &gpu_hw, sizeof(gpu_hw));
 
 	IOLog("OP2 GPU: Initializing Adreno 430 GPU driver (gpu=%u, gpu_hw=%u)...\n", gpu_arg, gpu_hw);
@@ -405,6 +405,8 @@ OP2GPU::start(IOService *provider)
 	setProperty("MetalPluginClassName", "OP2MetalDevice");
 	setProperty("IOGLBundleName", "OP2Metal");
 	setProperty("IOGLPluginName", "OP2Metal");
+	setProperty("IOGLESBundleName", "AGXGLDriver");
+	setProperty("IOGLESMetalBundleName", "AGXGLDriver");
 	setProperty("RingBufferSize", OP2_GPU_RB_SIZE, 32);
 	setProperty(kIOUserClientClassKey, "OP2GPUUserClient");
 
