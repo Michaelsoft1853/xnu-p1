@@ -274,6 +274,15 @@ AppleCLCD::drawProgressBar(uint32_t percent)
 	op2_fb_kick_panel(fMdpCtl);
 }
 
+extern "C" void
+op2_fb_kick_panel_external(void)
+{
+	if (op2_fb_instance != NULL && op2_fb_instance->fMdpCtl != NULL) {
+		__asm__ volatile("dsb sy" ::: "memory");
+		op2_fb_kick_panel(op2_fb_instance->fMdpCtl);
+	}
+}
+
 extern "C" void op2_threaddump_start(void);
 
 bool

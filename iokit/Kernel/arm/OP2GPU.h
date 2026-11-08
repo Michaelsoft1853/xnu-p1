@@ -195,6 +195,19 @@ struct drm_gem_close {
 	uint32_t handle, pad;
 };
 
+struct op2_surface_req {
+	uint32_t surface_id;
+	uint32_t handle;
+	uint64_t phys_addr;
+	uint64_t size;
+	uint32_t width;
+	uint32_t height;
+	uint32_t stride;
+	uint32_t format;
+};
+
+extern "C" void op2_fb_kick_panel_external(void);
+
 class OP2GPUUserClient;
 
 class OP2GPU : public IOService {
@@ -253,7 +266,7 @@ public:
 };
 
 struct op2_gpu_client_buffer {
-	IOBufferMemoryDescriptor *desc;
+	IOMemoryDescriptor       *desc;
 	void                     *kernel_addr;
 	uint64_t                  phys_addr;
 	uint64_t                  size;

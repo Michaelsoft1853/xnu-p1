@@ -10,6 +10,7 @@
  */
 
 #include "OP2GPU.h"
+#include "OP2Surface.h"
 #include "op2_a430_fw.h"
 #include "op2_rpm.h"
 #include <pexpert/pexpert.h>
@@ -1007,7 +1008,7 @@ OP2GPUUserClient::clientMemoryForType(UInt32 type,
 	}
 	b->desc->retain();
 	*memory = b->desc;
-	*options = 0;
+	*options = (b->flags & 1) ? kIOMapInhibitCache : 0;
 	IOLockUnlock(fLock);
 	return kIOReturnSuccess;
 }
@@ -1134,6 +1135,86 @@ OP2GPUUserClient::externalMethod(uint32_t selector,
 			return kIOReturnBadArgument;
 		}
 		return gemClose(handle);
+	}
+
+	case kOP2Surface: {
+		if (!args->structureInput || args->structureInputSize < sizeof(struct op2_surface_req)) {
+			return kIOReturnBadArgument;
+		}
+		struct op2_surface_req req;
+		memcpy(&req, args->structureInput, sizeof(req));
+
+		uint32_t sid = req.surface_id ? req.surface_id : 1;
+		OP2Surface *s = op2_surface_copy(sid);
+		if (!s) {
+			IOLog("OP2 GPU Client: kOP2Surface surface %u not found\n", sid);
+			return kIOReturnNotFound;
+		}
+
+		IOLockLock(fLock);
+
+		int slot = -1;
+		for (uint32_t i = 0; i < OP2_GPU_MAX_BUFFERS; i++) {
+			if (!fBuffers[i].in_use) {
+				slot = (int)i;
+				break;
+			}
+		}
+		if (slot == -1) {
+			IOLockUnlock(fLock);
+			s->release();
+			return kIOReturnNoSpace;
+		}
+
+		IOPhysicalLength segLen = 0;
+		uint64_t phys = 0;
+		if (s->memory) {
+			phys = (uint64_t)s->memory->getPhysicalSegment(0, &segLen);
+		}
+
+		if (phys == 0 && sid == 1) {
+			phys = 0x03400000ULL;
+		}
+
+		uint64_t buf_size = s->allocSize ? s->allocSize : ((uint64_t)s->bytesPerRow * s->height);
+		if (buf_size == 0) {
+			buf_size = 1088 * 1920 * 4;
+		}
+
+		if (s->memory) {
+			s->memory->retain();
+		}
+
+		fBuffers[slot].desc = s->memory;
+		fBuffers[slot].kernel_addr = (void *)s->kernelAddress();
+		fBuffers[slot].phys_addr = phys;
+		fBuffers[slot].size = buf_size;
+		fBuffers[slot].flags = 1; /* Framebuffer uncached mapping */
+		fBuffers[slot].fence = 0;
+		fBuffers[slot].in_use = true;
+		fBufferCount++;
+
+		req.handle = (uint32_t)(slot + 1);
+		req.phys_addr = phys;
+		req.size = buf_size;
+		req.width = s->width ? s->width : 1080;
+		req.height = s->height ? s->height : 1920;
+		req.stride = s->bytesPerRow ? s->bytesPerRow : (1088 * 4);
+		req.format = s->pixelFormat;
+
+		IOLog("OP2 GPU Client: kOP2Surface bound surface %u -> handle %u (phys 0x%llx, size %llu, %ux%u stride %u)\n",
+		      sid, req.handle, phys, buf_size, req.width, req.height, req.stride);
+
+		IOLockUnlock(fLock);
+		s->release();
+
+		return op2_gpu_struct_out(args, &req, sizeof(req));
+	}
+
+	case kOP2Show: {
+		op2_fb_kick_panel_external();
+		IOLog("OP2 GPU Client: kOP2Show kicked display panel\n");
+		return kIOReturnSuccess;
 	}
 
 	default:
