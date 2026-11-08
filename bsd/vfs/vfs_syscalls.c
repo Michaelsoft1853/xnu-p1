@@ -790,6 +790,12 @@ mount_common(char *fstypename, vnode_t pvp, vnode_t vp,
 
 update:
 
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	if (mp->mnt_flag & MNT_ROOTFS) {
+		flags &= ~MNT_RDONLY;
+	}
+#endif
+
 	/*
 	 * Set the mount level flags.
 	 */
@@ -978,7 +984,18 @@ update:
 			vnode_put(device_vnode);
 			device_vnode = NULLVP;
 			if (error != 0) {
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+				if ((vfs_flags(mp) & MNT_ROOTFS) && error == EROFS) {
+					/* Root disk is read-only hardware; ignore write upgrade and stay ro */
+					mp->mnt_kern_flag &= ~MNTK_WANTRDWR;
+					mp->mnt_flag |= MNT_RDONLY;
+					error = 0;
+				} else {
+					goto out2;
+				}
+#else
 				goto out2;
+#endif
 			}
 		}
 	}

@@ -35,7 +35,15 @@ enum {
 };
 
 #define OP2_AKS_SYSTEM_HANDLE 0
-#define OP2_AKS_LOCK_STATE    0x4 /* bit 2: unlocked since boot */
+/*
+ * keybag_state bitmask (libaks):
+ *   keybag_state_unlocked       = 0,
+ *   keybag_state_locked         = 1 << 0 (0x1),
+ *   keybag_state_no_pin         = 1 << 1 (0x2),
+ *   keybag_state_been_unlocked  = 1 << 2 (0x4)
+ * Setting 0x6 indicates no PIN/passcode configured and unlocked since boot.
+ */
+#define OP2_AKS_LOCK_STATE    0x6
 
 class AppleKeyStore : public IOService {
 	OSDeclareDefaultStructors(AppleKeyStore);
@@ -183,11 +191,24 @@ AppleKeyStoreUserClient::externalMethod(uint32_t selector, IOExternalMethodArgum
 		args->scalarOutputCount = 1;
 		break;
 	case kAKSGetDeviceState:
+	case 35: /* kAKSGetExtendedDeviceState */
 		args->scalarOutputCount = 0;
 		ret = op2_aks_device_state(args);
 		break;
+	case 34:
+		if (out_scalars >= 1) {
+			args->scalarOutput[0] = 0;
+			args->scalarOutputCount = 1;
+		} else {
+			args->scalarOutputCount = 0;
+		}
+		break;
+	case 97:
+		args->scalarOutputCount = 0;
+		break;
 	default:
-		ret = kIOReturnUnsupported;
+		args->scalarOutputCount = 0;
+		ret = kIOReturnSuccess;
 		break;
 	}
 

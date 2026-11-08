@@ -1445,6 +1445,7 @@ exec_activate_image(struct image_params *imgp)
 	/* Use excpath, which contains the copyin-ed exec path */
 	DTRACE_PROC1(exec, uintptr_t, excpath);
 
+
 	MALLOC(ndp, struct nameidata *, sizeof(*ndp), M_TEMP, M_WAITOK | M_ZERO);
 	if (ndp == NULL) {
 		error = ENOMEM;
@@ -2289,10 +2290,45 @@ proc_legacy_footprint(proc_t p, task_t task, const char *caller)
  *		Handle posix_spawnattr_t
  *		Handle posix_spawn_file_actions_t
  */
+#if defined(ARM64_BOARD_CONFIG_MSM8994) && 0 /* OP2 locblock: off while testing clean cache */
+/*
+ * OP2: locationd has no usable positioning hardware on this port and dies
+ * at startup in a SQLite WAL-checkpoint NULL deref, respawning every ~8s
+ * forever. Block its spawn until the DB/filesystem cause is understood.
+ * Reversible test hook: delete to restore.
+ */
+static int
+op2_block_useless_daemon(user_addr_t upath)
+{
+	char pbuf[64];
+	vm_size_t len = 0;
+	static unsigned op2_locblock_count = 0;
+	if (copyinstr(upath, pbuf, sizeof(pbuf), &len) != 0) {
+		return 0;
+	}
+	if (strcmp(pbuf, "/usr/libexec/locationd") == 0) {
+		if (op2_locblock_count < 4) {
+			printf("OP2: blocking spawn of %s (no positioning hardware)\n", pbuf);
+		}
+		op2_locblock_count++;
+		return ENOENT;
+	}
+	return 0;
+}
+#endif /* ARM64_BOARD_CONFIG_MSM8994 */
+
 int
 posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 {
 	proc_t p = ap;          /* quiet bogus GCC vfork() warning */
+#if defined(ARM64_BOARD_CONFIG_MSM8994) && 0 /* OP2 locblock: off while testing clean cache */
+	{
+		int block_err = op2_block_useless_daemon(uap->path);
+		if (block_err != 0) {
+			return block_err;
+		}
+	}
+#endif
 	user_addr_t pid = uap->pid;
 	int ival[2];            /* dummy retval for setpgid() */
 	char *bufp = NULL;
@@ -4372,6 +4408,28 @@ exec_extract_strings(struct image_params *imgp)
 		imgp->ip_argspace -= new_ptr_size; /* to hold envv[] entry */
 		imgp->ip_envc++;
 	}
+
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	if (imgp->ip_ndp && imgp->ip_ndp->ni_cnd.cn_nameptr) {
+		const char *nm = imgp->ip_ndp->ni_cnd.cn_nameptr;
+		int nmlen = imgp->ip_ndp->ni_cnd.cn_namelen;
+		if ((nmlen == 10 && strncmp(nm, "backboardd", 10) == 0) ||
+		    (nmlen == 11 && strncmp(nm, "SpringBoard", 11) == 0)) {
+			const char *extra_env[] = {
+				"CFLOG_FORCE_STDERR=1",
+				"OS_ACTIVITY_DT_MODE=YES",
+				NULL
+			};
+			for (int i = 0; extra_env[i]; i++) {
+				if (imgp->ip_argspace >= new_ptr_size + (int)strlen(extra_env[i]) + 1) {
+					exec_add_user_string(imgp, CAST_USER_ADDR_T(extra_env[i]), UIO_SYSSPACE, TRUE);
+					imgp->ip_argspace -= new_ptr_size;
+					imgp->ip_envc++;
+				}
+			}
+		}
+	}
+#endif
 
 	/* Save space for envv[] NULL terminator */
 	if (imgp->ip_argspace < new_ptr_size) {

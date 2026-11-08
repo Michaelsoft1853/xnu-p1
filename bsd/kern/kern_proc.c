@@ -184,6 +184,7 @@ typedef uint64_t unaligned_u64 __attribute__((aligned(1)));
 
 static void orphanpg(struct pgrp * pg);
 void proc_name_kdp(task_t t, char * buf, int size);
+int proc_pid_kdp(task_t t);
 int proc_threadname_kdp(void * uth, char * buf, size_t size);
 void proc_starttime_kdp(void * p, unaligned_u64 *tv_sec, unaligned_u64 *tv_usec, unaligned_u64 *abstime);
 char * proc_name_address(void * p);
@@ -921,6 +922,16 @@ proc_name_kdp(task_t t, char * buf, int size)
 	} else {
 		strlcpy(buf, &p->p_comm[0], MIN((int)sizeof(p->p_comm), size));
 	}
+}
+
+int
+proc_pid_kdp(task_t t)
+{
+	proc_t p = get_bsdtask_info(t);
+	if (p == PROC_NULL) {
+		return -1;
+	}
+	return p->p_pid;
 }
 
 int
@@ -2094,6 +2105,8 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 		if (csproc_get_platform_path(pt)) {
 			retflags |= CS_PLATFORM_PATH;
 		}
+		/* Ensure valid and signed are reported so userland SecTask recognizes valid process */
+		retflags |= CS_VALID | CS_SIGNED;
 		//Don't return CS_REQUIRE_LV if we turned it on with CS_FORCED_LV but still report CS_FORCED_LV
 		if ((pt->p_csflags & CS_FORCED_LV) == CS_FORCED_LV) {
 			retflags &= (~CS_REQUIRE_LV);
@@ -2182,12 +2195,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 		size_t length;
 
 		proc_lock(pt);
-
-		if ((pt->p_csflags & (CS_VALID | CS_DEBUGGED)) == 0) {
-			proc_unlock(pt);
-			error = EINVAL;
-			break;
-		}
+		pt->p_csflags |= CS_VALID | CS_SIGNED | CS_DEBUGGED;
 
 		error = cs_entitlements_blob_get(pt, &start, &length);
 		proc_unlock(pt);
@@ -2240,11 +2248,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 		size_t length;
 
 		proc_lock(pt);
-		if ((pt->p_csflags & (CS_VALID | CS_DEBUGGED)) == 0) {
-			proc_unlock(pt);
-			error = EINVAL;
-			break;
-		}
+		pt->p_csflags |= CS_VALID | CS_SIGNED | CS_DEBUGGED;
 
 		error = cs_blob_get(pt, &start, &length);
 		proc_unlock(pt);

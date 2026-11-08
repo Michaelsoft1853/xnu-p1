@@ -2226,6 +2226,22 @@ psignal_internal(proc_t p, task_t task, thread_t thread, int flavor, int signum,
 		return;
 	}
 
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	if (signum == SIGABRT || signum == SIGKILL || signum == SIGQUIT ||
+	    signum == SIGBUS || signum == SIGSEGV || signum == SIGILL) {
+		extern void kprintf(const char *fmt, ...);
+		proc_t sender = current_proc();
+		kprintf("PSIGNAL: from pid=%d[%s] to target_pid=%d[%s] sig=%d flavor=%d reason_ns=%u code=0x%llx\n",
+		        sender ? sender->p_pid : 0,
+		        sender ? sender->p_comm : "kernel",
+		        sig_proc ? sig_proc->p_pid : 0,
+		        sig_proc ? sig_proc->p_comm : "unknown",
+		        signum, flavor,
+		        signal_reason ? signal_reason->osr_namespace : 0,
+		        signal_reason ? signal_reason->osr_code : 0);
+	}
+#endif
+
 	/*
 	 * do not send signals to the process that has the thread
 	 * doing a reboot(). Not doing so will mark that thread aborted
@@ -3233,6 +3249,11 @@ postsig_locked(int signum)
 
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_FRCEXIT) | DBG_FUNC_NONE,
 		    p->p_pid, W_EXITCODE(0, signum), 3, 0, 0);
+
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+		extern void op2_log_user_state(const char *prefix, int pid, const char *comm);
+		op2_log_user_state("POSTSIG_FATAL", p->p_pid, p->p_comm);
+#endif
 
 		exit_with_reason(p, W_EXITCODE(0, signum), (int *)NULL, TRUE, TRUE, 0, ut_exit_reason);
 

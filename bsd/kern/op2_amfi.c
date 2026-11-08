@@ -38,6 +38,8 @@ struct amfi_dyld_policy_proc_args {
 	user_addr_t out_flags_ptr;
 };
 
+static uint64_t op2_sandbox_seen;
+
 static int
 op2_mac_policy_syscall(struct proc *p, int call, user_addr_t arg)
 {
@@ -47,7 +49,6 @@ op2_mac_policy_syscall(struct proc *p, int call, user_addr_t arg)
 		struct amfi_dyld_policy_self_args kargs;
 		int err = copyin(arg, &kargs, sizeof(kargs));
 		if (err) {
-			printf("OP2 MAC: call 0x5a copyin failed (%d) for pid %d\n", err, pid);
 			return err;
 		}
 
@@ -55,12 +56,9 @@ op2_mac_policy_syscall(struct proc *p, int call, user_addr_t arg)
 		if (kargs.out_flags_ptr != 0) {
 			err = copyout(&out_flags, kargs.out_flags_ptr, sizeof(out_flags));
 			if (err) {
-				printf("OP2 MAC: call 0x5a copyout failed (%d) for pid %d\n", err, pid);
 				return err;
 			}
 		}
-		printf("OP2 MAC: dyld_policy_self handled for pid %d (in=0x%llx, out=0x%llx)\n",
-		       pid, (unsigned long long)kargs.in_flags, (unsigned long long)out_flags);
 		return 0;
 	}
 
@@ -80,14 +78,67 @@ op2_mac_policy_syscall(struct proc *p, int call, user_addr_t arg)
 		if (kargs.out_flags_ptr != 0) {
 			copyout(&out_flags, kargs.out_flags_ptr, sizeof(out_flags));
 		}
-		printf("OP2 MAC: dyld_policy_proc handled for target pid %d from pid %d\n",
-		       kargs.pid, pid);
 		return 0;
 	}
 
-	printf("OP2 MAC: syscall call=0x%x (%d) from pid %d (arg=0x%llx) -> success\n",
-	       call, call, pid, (unsigned long long)arg);
-	return 0;
+	if (call >= 0 && call < 64 && !(op2_sandbox_seen & (1ULL << call))) {
+		op2_sandbox_seen |= 1ULL << call;
+		char name[32] = {0};
+		proc_name(pid, name, sizeof(name));
+		printf("OP2 Sandbox: %s op %d\n", name, call);
+	}
+
+	switch (call) {
+	case 2: {
+		/*
+		 * sandbox_check() / _sandbox_check_by_audit_token():
+		 * arg[0] is user_addr_t out_ptr pointing to result on user stack.
+		 * Userland expects *out_ptr == 0 for allowed (non-zero = denied).
+		 */
+		user_addr_t out_ptr = 0;
+		if (copyin(arg, &out_ptr, sizeof(out_ptr)) == 0 && out_ptr != 0) {
+			uint64_t zero = 0;
+			copyout(&zero, out_ptr, sizeof(zero));
+		}
+		return 0;
+	}
+	case 28: /* 0x1c */ {
+		/*
+		 * sandbox_check_by_audit_token() variant:
+		 * arg[16] is user_addr_t out_ptr pointing to result on user stack.
+		 * Userland initializes result to -1 and returns it if syscall returns 0.
+		 */
+		user_addr_t out_ptr = 0;
+		if (copyin(arg + 16, &out_ptr, sizeof(out_ptr)) == 0 && out_ptr != 0) {
+			uint64_t zero = 0;
+			copyout(&zero, out_ptr, sizeof(zero));
+		}
+		if (copyin(arg, &out_ptr, sizeof(out_ptr)) == 0 && out_ptr != 0) {
+			uint64_t zero = 0;
+			copyout(&zero, out_ptr, sizeof(zero));
+		}
+		return 0;
+	}
+	case 259: /* 0x103 */ {
+		/*
+		 * sandbox_check_by_reference():
+		 * arg[8] is user_addr_t out_ptr.
+		 */
+		user_addr_t out_ptr = 0;
+		if (copyin(arg + 8, &out_ptr, sizeof(out_ptr)) == 0 && out_ptr != 0) {
+			uint64_t zero = 0;
+			copyout(&zero, out_ptr, sizeof(zero));
+		}
+		return 0;
+	}
+	case 4:         /* container path (audit token / pid) */
+	case 5:         /* extension issue */
+	case 6:         /* extension consume */
+	case 0x43:      /* container expected */
+		return ENOENT;
+	default:
+		return 0;
+	}
 }
 
 static int
@@ -98,9 +149,10 @@ op2_mac_vnode_check_signature(struct vnode *vp, __unused struct label *label,
     __unused char **fatal_failure_desc, __unused size_t *fatal_failure_desc_len)
 {
 	if (cs_flags != NULL) {
-		*cs_flags |= CS_VALID | CS_SIGNED | CS_PLATFORM_BINARY;
+		*cs_flags |= CS_VALID | CS_SIGNED | CS_PLATFORM_BINARY | CS_DEBUGGED;
 	}
-	if (vp != NULL && vp->v_name != NULL) {
+	extern int cs_debug;
+	if (cs_debug > 0 && vp != NULL && vp->v_name != NULL) {
 		printf("OP2 MAC: vnode_check_signature for '%s' -> platform binary\n", vp->v_name);
 	}
 	return 0;

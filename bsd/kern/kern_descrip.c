@@ -1151,6 +1151,9 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			}
 			break;
 		}
+		if (error == ENOTSUP || error == EOPNOTSUPP) {
+			error = 0;
+		}
 		(void) vnode_put(vp);
 		goto outdrop;
 

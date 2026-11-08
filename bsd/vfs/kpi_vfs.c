@@ -5310,15 +5310,15 @@ VNOP_ADVLOCK(struct vnode *vp, caddr_t id, int op, struct flock *fl, int flags, 
 	if (vnode_isfifo(vp)) {
 		_err = err_advlock(&a);
 	} else {
-		if ((vp->v_flag & VLOCKLOCAL)) {
+		if ((vp->v_flag & VLOCKLOCAL) || (flags & F_OFD_LOCK)) {
 			/* Advisory locking done at this layer */
 			_err = lf_advlock(&a);
-		} else if (flags & F_OFD_LOCK) {
-			/* Non-local locking doesn't work for OFD locks */
-			_err = err_advlock(&a);
 		} else {
 			/* Advisory locking done by underlying filesystem */
 			_err = (*vp->v_op[vnop_advlock_desc.vdesc_offset])(&a);
+			if (_err == ENOTSUP || _err == ENOSYS) {
+				_err = lf_advlock(&a);
+			}
 		}
 		DTRACE_FSINFO(advlock, vnode_t, vp);
 		if (op == F_UNLCK && flags == F_FLOCK) {

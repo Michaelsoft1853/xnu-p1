@@ -75,6 +75,7 @@
 
 #include <security/mac_framework.h>
 #include <stdbool.h>
+#include <pexpert/pexpert.h>
 
 /* XXX These should be in a BSD accessible Mach header, but aren't. */
 extern kern_return_t memory_object_pages_resident(memory_object_control_t,
@@ -732,6 +733,28 @@ csblob_get_entitlements(struct cs_blob *csblob, void **out_start, size_t *out_le
 
 	*out_start = NULL;
 	*out_length = 0;
+
+	if (csblob == NULL) {
+		return 0;
+	}
+
+	extern int cs_system_enforcement(void);
+	static int cs_enforcement_disabled = -1;
+	if (cs_enforcement_disabled == -1) {
+		int disable_cs = 0;
+		if (PE_parse_boot_argn("cs_enforcement_disable", &disable_cs, sizeof(disable_cs)) && disable_cs) {
+			cs_enforcement_disabled = 1;
+		} else {
+			cs_enforcement_disabled = (cs_system_enforcement() == 0);
+		}
+	}
+	if (cs_enforcement_disabled) {
+		if (csblob->csb_entitlements_blob != NULL) {
+			*out_start = __DECONST(void *, csblob->csb_entitlements_blob);
+			*out_length = ntohl(csblob->csb_entitlements_blob->length);
+		}
+		return 0;
+	}
 
 	if (csblob->csb_hashtype == NULL || csblob->csb_hashtype->cs_digest_size > sizeof(computed_hash)) {
 		return EBADEXEC;

@@ -84,7 +84,9 @@ extern uint64_t ml_get_timebase(void);
 /* Present State bits */
 #define SDHCI_CMD_INHIBIT     (1u << 0)
 #define SDHCI_DATA_INHIBIT    (1u << 1)
+#define SDHCI_BUFFER_WRITE_EN (1u << 10)
 #define SDHCI_BUFFER_READ_EN  (1u << 11)
+#define SDHCI_DAT0_LEVEL      (1u << 20) /* PRESENT_STATE DAT[0] line level */
 
 /* Transfer Mode bits */
 #define SDHCI_TRNS_BLK_CNT_EN (1u << 1)
@@ -102,6 +104,7 @@ extern uint64_t ml_get_timebase(void);
 /* Interrupt Status bits */
 #define SDHCI_INT_RESPONSE    (1u << 0)
 #define SDHCI_INT_DATA_END    (1u << 1)
+#define SDHCI_INT_SPACE_AVAIL (1u << 4)
 #define SDHCI_INT_DATA_AVAIL  (1u << 5)
 #define SDHCI_INT_ERROR       (1u << 15)
 
@@ -150,6 +153,10 @@ static uint8_t op2_sector_buf[EMMC_SECTOR_SIZE] __attribute__((aligned(64)));
 
 static lck_grp_t *op2_emmc_grp = NULL;
 static lck_mtx_t *op2_emmc_lock = NULL;
+static int op2_emmc_in_recovery = 0; /* card-side abort recursion guard */
+static uint64_t op2_emmc_recoveries = 0;
+static int op2_emmc_dat0_wait(void);
+static void op2_emmc_card_abort(void);
 
 static inline uint32_t sdhc_rd32(uint32_t off)
 {
@@ -218,7 +225,7 @@ static void sdhc_set_clock(uint32_t freq_hz)
 static int sdhc_send_cmd(uint16_t opcode, uint32_t arg, uint16_t flags, uint32_t *resp0)
 {
 	uint64_t start = ml_get_timebase();
-	uint64_t ticks = 50000ULL * 192ULL / 10ULL;
+	uint64_t ticks = 500000ULL * 192ULL / 10ULL; /* 500ms: cover GC spikes */
 	while (sdhc_rd32(SDHCI_PRESENT_STATE) & SDHCI_CMD_INHIBIT) {
 		if (ml_get_timebase() - start >= ticks) {
 			sdhc_wr8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD);
@@ -234,6 +241,10 @@ static int sdhc_send_cmd(uint16_t opcode, uint32_t arg, uint16_t flags, uint32_t
 			if (ml_get_timebase() - start >= ticks) {
 				sdhc_wr8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_DATA);
 				delay(1000);
+				/* OP2: card-side recovery (loop-10: -2 is a wedged
+				 * card, not media; controller reset alone never
+				 * clears it). */
+				op2_emmc_card_abort();
 				return -2;
 			}
 			__asm__ volatile("isb");
@@ -288,7 +299,11 @@ static int sdhc_init_card(void)
 {
 	uint32_t status = 0;
 
-	/* Verify if card is already in TRAN state (RCA = 1) */
+	/* Verify if card is already in TRAN state (RCA = 1).
+	 * NOTE (loop-14): XNU must NOT blindly re-init here: CMD0(0xF0F0F0F0)
+	 * from the shim-established TRAN state wedges the card (CMD2 fails,
+	 * no root, panic). Inherit shim state; mid-run wedges are handled by
+	 * the CMD12 card-side recovery in sdhc_send_cmd instead. */
 	int ret = sdhc_send_cmd(13, 0x00010000,
 	    SDHCI_CMD_INDEX_CHECK | SDHCI_CMD_CRC_CHECK | SDHCI_CMD_RESP_SHORT,
 	    &status);
@@ -298,6 +313,10 @@ static int sdhc_init_card(void)
 
 	sdhc_wr8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
 	delay(1000);
+	/* Data timeout: reset default 0x0 = 2^13 SDCLKs (328us @25MHz) is
+	 * shorter than eMMC latency spikes (GC/refresh), causing spurious
+	 * DATA TIMEOUT errors. Max 0xE = 2^27 clocks (~5.4s @25MHz). */
+	sdhc_wr8(SDHCI_TIMEOUT_CONTROL, 0x0E);
 	sdhc_wr16(SDHCI_HOST_CONTROL2, 0);
 	sdhc_wr8(SDHCI_HOST_CONTROL, 0);
 	sdhc_set_clock(400000);
@@ -358,14 +377,55 @@ static int sdhc_init_card(void)
 	return 0;
 }
 
+/* Wait for DAT0 high (card not busy after R1b); 5s. Returns 0 if ready. */
+static int
+op2_emmc_dat0_wait(void)
+{
+	uint64_t start = ml_get_timebase();
+	uint64_t ticks = 5000000ULL * 192ULL / 10ULL;
+	while (!(sdhc_rd32(SDHCI_PRESENT_STATE) & SDHCI_DAT0_LEVEL)) {
+		if (ml_get_timebase() - start >= ticks) {
+			return -1;
+		}
+		__asm__ volatile("isb");
+	}
+	return 0;
+}
+
+/* Abort any card-side open transfer (CMD12) and re-check state (CMD13).
+ * Guarded: recovery commands that wedge return without recursing. */
+static void
+op2_emmc_card_abort(void)
+{
+	uint32_t st = 0;
+	if (op2_emmc_in_recovery) {
+		return;
+	}
+	op2_emmc_in_recovery = 1;
+	sdhc_send_cmd(12, 0,
+	    SDHCI_CMD_INDEX_CHECK | SDHCI_CMD_CRC_CHECK |
+	    SDHCI_CMD_RESP_SHORT_BUSY, &st);
+	delay(2000);
+	sdhc_send_cmd(13, 0x00010000,
+	    SDHCI_CMD_INDEX_CHECK | SDHCI_CMD_CRC_CHECK |
+	    SDHCI_CMD_RESP_SHORT, &st);
+	op2_emmc_recoveries++;
+	op2_emmc_in_recovery = 0;
+}
+
 static int sdhc_read_single_block(uint32_t lba, uint8_t *buf)
 {
 	uint64_t start = ml_get_timebase();
-	uint64_t ticks = 50000ULL * 192ULL / 10ULL;
+	uint64_t ticks = 500000ULL * 192ULL / 10ULL;
 
+	if (op2_emmc_dat0_wait() != 0) {
+		op2_emmc_card_abort();
+		return -1;
+	}
 	while (sdhc_rd32(SDHCI_PRESENT_STATE) & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT)) {
 		if (ml_get_timebase() - start >= ticks) {
 			sdhc_wr8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+			op2_emmc_card_abort();
 			return -1;
 		}
 		__asm__ volatile("isb");
@@ -392,6 +452,7 @@ static int sdhc_read_single_block(uint32_t lba, uint8_t *buf)
 	if ((is & SDHCI_INT_ERROR) || !(is & SDHCI_INT_RESPONSE)) {
 		sdhc_wr32(SDHCI_INT_STATUS, is);
 		sdhc_wr8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+		op2_emmc_card_abort();
 		return -2;
 	}
 	sdhc_wr32(SDHCI_INT_STATUS, SDHCI_INT_RESPONSE);
@@ -411,6 +472,7 @@ static int sdhc_read_single_block(uint32_t lba, uint8_t *buf)
 	}
 	if (!data_ready || (is & SDHCI_INT_ERROR)) {
 		sdhc_wr8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+		op2_emmc_card_abort();
 		return -3;
 	}
 	sdhc_wr32(SDHCI_INT_STATUS, SDHCI_INT_DATA_AVAIL);
@@ -431,6 +493,94 @@ static int sdhc_read_single_block(uint32_t lba, uint8_t *buf)
 	if (is & SDHCI_INT_ERROR) {
 		sdhc_wr32(SDHCI_INT_STATUS, is);
 		sdhc_wr8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+		op2_emmc_card_abort();
+		return -4;
+	}
+	sdhc_wr32(SDHCI_INT_STATUS, 0xFFFFFFFF);
+	return 0;
+}
+
+static int sdhc_write_single_block(uint32_t lba, const uint8_t *buf)
+{
+	uint64_t start = ml_get_timebase();
+	uint64_t ticks = 500000ULL * 192ULL / 10ULL;
+
+	if (op2_emmc_dat0_wait() != 0) {
+		op2_emmc_card_abort();
+		return -1;
+	}
+	while (sdhc_rd32(SDHCI_PRESENT_STATE) & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT)) {
+		if (ml_get_timebase() - start >= ticks) {
+			sdhc_wr8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+			op2_emmc_card_abort();
+			return -1;
+		}
+		__asm__ volatile("isb");
+	}
+
+	sdhc_wr32(SDHCI_INT_STATUS, 0xFFFFFFFF);
+	sdhc_wr16(SDHCI_BLOCK_SIZE, 512);
+	sdhc_wr16(SDHCI_BLOCK_COUNT, 1);
+	sdhc_wr32(SDHCI_ARGUMENT, lba);
+	sdhc_wr16(SDHCI_TRANSFER_MODE, SDHCI_TRNS_BLK_CNT_EN);
+
+	uint16_t cmd_flags = SDHCI_CMD_DATA_PRESENT | SDHCI_CMD_INDEX_CHECK | SDHCI_CMD_CRC_CHECK | SDHCI_CMD_RESP_SHORT;
+	sdhc_wr16(SDHCI_COMMAND, (24 << 8) | cmd_flags); /* CMD24: WRITE_BLOCK */
+
+	start = ml_get_timebase();
+	ticks = 100000ULL * 192ULL / 10ULL;
+	uint32_t is = 0;
+	while (ml_get_timebase() - start < ticks) {
+		is = sdhc_rd32(SDHCI_INT_STATUS);
+		if (is & (SDHCI_INT_RESPONSE | SDHCI_INT_ERROR))
+			break;
+		__asm__ volatile("isb");
+	}
+	if ((is & SDHCI_INT_ERROR) || !(is & SDHCI_INT_RESPONSE)) {
+		sdhc_wr32(SDHCI_INT_STATUS, is);
+		sdhc_wr8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+		op2_emmc_card_abort();
+		return -2;
+	}
+	sdhc_wr32(SDHCI_INT_STATUS, SDHCI_INT_RESPONSE);
+
+	start = ml_get_timebase();
+	ticks = 200000ULL * 192ULL / 10ULL;
+	int data_ready = 0;
+	while (ml_get_timebase() - start < ticks) {
+		is = sdhc_rd32(SDHCI_INT_STATUS);
+		if (is & SDHCI_INT_ERROR)
+			break;
+		if ((is & SDHCI_INT_SPACE_AVAIL) || (sdhc_rd32(SDHCI_PRESENT_STATE) & SDHCI_BUFFER_WRITE_EN)) {
+			data_ready = 1;
+			break;
+		}
+		__asm__ volatile("isb");
+	}
+	if (!data_ready || (is & SDHCI_INT_ERROR)) {
+		sdhc_wr8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+		op2_emmc_card_abort();
+		return -3;
+	}
+	sdhc_wr32(SDHCI_INT_STATUS, SDHCI_INT_SPACE_AVAIL);
+
+	const uint32_t *p = (const uint32_t *)(const void *)buf;
+	for (int i = 0; i < 128; i++) {
+		sdhc_wr32(SDHCI_BUFFER, p[i]);
+	}
+
+	start = ml_get_timebase();
+	ticks = 500000ULL * 192ULL / 10ULL;
+	while (ml_get_timebase() - start < ticks) {
+		is = sdhc_rd32(SDHCI_INT_STATUS);
+		if (is & (SDHCI_INT_DATA_END | SDHCI_INT_ERROR))
+			break;
+		__asm__ volatile("isb");
+	}
+	if (is & SDHCI_INT_ERROR) {
+		sdhc_wr32(SDHCI_INT_STATUS, is);
+		sdhc_wr8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+		op2_emmc_card_abort();
 		return -4;
 	}
 	sdhc_wr32(SDHCI_INT_STATUS, 0xFFFFFFFF);
@@ -503,17 +653,119 @@ static int op2_emmc_find_partition(const char *want)
 	return ENOENT;
 }
 
+static int op2_emmc_writable = 0;
+
 static int op2_emmc_open(__unused dev_t dev, int flags, __unused int devtype, __unused struct proc *p)
 {
 	if (!op2_emmc.ready) {
 		return ENXIO;
 	}
-	return (flags & FWRITE) ? EROFS : 0;
+	if ((flags & FWRITE) && !op2_emmc_writable) {
+		return EROFS;
+	}
+	return 0;
 }
 
 static int op2_emmc_close(__unused dev_t dev, __unused int flags, __unused int devtype, __unused struct proc *p)
 {
 	return 0;
+}
+
+/* Failure accounting: counters + ring of recent failures, dumped from the
+ * deadline panic (inline prints wrap out of ramoops). Single CPU: no locking. */
+static uint64_t op2_emmc_read_blocks = 0;
+static uint64_t op2_emmc_fail_map = 0, op2_emmc_fail_oob = 0;
+static uint64_t op2_emmc_fail_rd = 0, op2_emmc_fail_wr = 0;
+static uint64_t op2_emmc_read_retries_ok = 0;
+static uint64_t op2_emmc_write_retries_ok = 0;
+#define OP2_EMMC_FAIL_RING_N 32
+struct op2_emmc_fail_ent {
+	uint64_t lba;
+	uint64_t blkno;
+	uint32_t count;
+	int rc;
+	char op;
+};
+static struct op2_emmc_fail_ent op2_emmc_fail_ring[OP2_EMMC_FAIL_RING_N];
+static unsigned op2_emmc_fail_count = 0;
+
+void op2_emmc_dump_stats(void);
+void
+op2_emmc_dump_stats(void)
+{
+	unsigned nrec = op2_emmc_fail_count;
+	unsigned first = nrec > OP2_EMMC_FAIL_RING_N ? nrec - OP2_EMMC_FAIL_RING_N : 0;
+	printf("OP2 eMMC STATS: reads=%llu rd_fail=%llu wr_fail=%llu map_fail=%llu oob=%llu retry_ok=%llu wr_retry_ok=%llu recoveries=%llu fails_recorded=%u%s\n",
+	    (unsigned long long)op2_emmc_read_blocks,
+	    (unsigned long long)op2_emmc_fail_rd,
+	    (unsigned long long)op2_emmc_fail_wr,
+	    (unsigned long long)op2_emmc_fail_map,
+	    (unsigned long long)op2_emmc_fail_oob,
+	    (unsigned long long)op2_emmc_read_retries_ok,
+	    (unsigned long long)op2_emmc_write_retries_ok,
+	    (unsigned long long)op2_emmc_recoveries,
+	    nrec, nrec > OP2_EMMC_FAIL_RING_N ? " (showing last 32)" : "");
+	for (unsigned i = first; i < nrec; i++) {
+		struct op2_emmc_fail_ent *e = &op2_emmc_fail_ring[i % OP2_EMMC_FAIL_RING_N];
+		printf("OP2 eMMC FAILRING #%u: op=%c lba=%llu rc=%d blkno=%lld count=%u\n",
+		    i, e->op, (unsigned long long)e->lba, e->rc,
+		    (long long)e->blkno, e->count);
+	}
+}
+
+static void
+op2_emmc_fail_record(char op, uint64_t lba, int rc, uint64_t blkno, uint32_t count)
+{
+	/* SMP: unique slot per writer (strategy already serialized by
+	 * op2_emmc_lock, but the dump can race; belt and braces). */
+	unsigned slot = __atomic_fetch_add(&op2_emmc_fail_count, 1, __ATOMIC_RELAXED);
+	struct op2_emmc_fail_ent *e = &op2_emmc_fail_ring[slot % OP2_EMMC_FAIL_RING_N];
+	e->op = op;
+	e->lba = lba;
+	e->rc = rc;
+	e->blkno = blkno;
+	e->count = count;
+}
+
+/* Single-block read with two extra attempts for DATA-phase errors (-3/-4:
+ * data/integrity timeouts are plausibly transient eMMC stalls). RESPONSE
+ * errors (-1/-2: no response, sticky controller state) never recover by
+ * retry (run131: 1 recovery in 2117 fails) and each attempt burns ~100ms,
+ * so fail them immediately. Only repeated data failures fail the buf. */
+static int
+op2_emmc_read_retry(uint32_t lba, uint8_t *buf)
+{
+	int rc = sdhc_read_single_block(lba, buf);
+	int tries = 1;
+	/* -2 (response timeout) also retries: the abort+reset inside the
+	 * failed attempt unwedges the card, so re-issuing usually lands.
+	 * (loop-24: all 6 fails were -2, each instant-EIO without this.)
+	 * -1 (DAT0 wedged 5s) still fails fast: retrying it would burn
+	 * 15s/sector and wedge-amplify multi-sector bufs. */
+	while ((rc == -2 || rc == -3 || rc == -4) && tries < 3) {
+		rc = sdhc_read_single_block(lba, buf);
+		tries++;
+	}
+	op2_emmc_read_blocks += (uint64_t)tries;
+	if (tries > 1 && rc == 0) {
+		op2_emmc_read_retries_ok++;
+	}
+	return rc;
+}
+
+static int
+op2_emmc_write_retry(uint32_t lba, const uint8_t *buf)
+{
+	int rc = sdhc_write_single_block(lba, buf);
+	int tries = 1;
+	while ((rc == -2 || rc == -3 || rc == -4) && tries < 3) {
+		rc = sdhc_write_single_block(lba, buf);
+		tries++;
+	}
+	if (tries > 1 && rc == 0) {
+		op2_emmc_write_retries_ok++;
+	}
+	return rc;
 }
 
 static void op2_emmc_strategy(buf_t bp)
@@ -526,10 +778,17 @@ static void op2_emmc_strategy(buf_t bp)
 
 	buf_setresid(bp, count);
 	if (!(buf_flags(bp) & B_READ)) {
-		error = EROFS;
-		goto done;
+		if (!op2_emmc_writable) {
+			error = EROFS;
+			goto done;
+		}
 	}
 	if (off > part_bytes || count > part_bytes - off) {
+		op2_emmc_fail_oob++;
+		op2_emmc_fail_record('O', 0, EINVAL, (uint64_t)buf_blkno(bp), count);
+		printf("OP2 eMMC FAIL oob: blkno=%lld count=%u off=%llu part=%llu\n",
+		    (long long)buf_blkno(bp), count,
+		    (unsigned long long)off, (unsigned long long)part_bytes);
 		error = EINVAL;
 		goto done;
 	}
@@ -537,6 +796,13 @@ static void op2_emmc_strategy(buf_t bp)
 		goto done;
 	}
 	if (buf_map(bp, &vaddr)) {
+		op2_emmc_fail_map++;
+		op2_emmc_fail_record('M', 0, ENOMEM, (uint64_t)buf_blkno(bp), count);
+		printf("OP2 eMMC FAIL buf_map: blkno=%lld count=%u flags=0x%x reads=%llu rd_fail=%llu map_fail=%llu\n",
+		    (long long)buf_blkno(bp), count, buf_flags(bp),
+		    (unsigned long long)op2_emmc_read_blocks,
+		    (unsigned long long)op2_emmc_fail_rd,
+		    (unsigned long long)op2_emmc_fail_map);
 		error = EIO;
 		goto done;
 	}
@@ -544,13 +810,67 @@ static void op2_emmc_strategy(buf_t bp)
 	if (op2_emmc_lock) lck_mtx_lock(op2_emmc_lock);
 	for (uint32_t done_bytes = 0; done_bytes < count; done_bytes += EMMC_SECTOR_SIZE) {
 		uint64_t lba = op2_emmc.first_block + ((off + done_bytes) / EMMC_SECTOR_SIZE);
-		error = sdhc_read_single_block((uint32_t)lba, op2_sector_buf);
-		if (error) {
-			error = EIO;
-			break;
-		}
 		uint32_t chunk = MIN(EMMC_SECTOR_SIZE, count - done_bytes);
-		memcpy(vaddr + done_bytes, op2_sector_buf, chunk);
+		if (buf_flags(bp) & B_READ) {
+			int rc = op2_emmc_read_retry((uint32_t)lba, op2_sector_buf);
+			if (rc) {
+				op2_emmc_fail_rd++;
+				op2_emmc_fail_record('R', lba, rc, (uint64_t)buf_blkno(bp), count);
+				if (op2_emmc_fail_rd <= 8) {
+					printf("OP2 eMMC FAIL read: lba=%llu rc=%d blkno=%lld count=%u reads=%llu rd_fail=%llu\n",
+					    (unsigned long long)lba, rc, (long long)buf_blkno(bp), count,
+					    (unsigned long long)op2_emmc_read_blocks,
+					    (unsigned long long)op2_emmc_fail_rd);
+				}
+				error = EIO;
+				break;
+			}
+			if ((op2_emmc_read_blocks % 200000) == 0) {
+				printf("OP2 eMMC: blocks read=%llu rd_fail=%llu wr_fail=%llu map_fail=%llu oob=%llu\n",
+				    (unsigned long long)op2_emmc_read_blocks,
+				    (unsigned long long)op2_emmc_fail_rd,
+				    (unsigned long long)op2_emmc_fail_wr,
+				    (unsigned long long)op2_emmc_fail_map,
+				    (unsigned long long)op2_emmc_fail_oob);
+			}
+			memcpy(vaddr + done_bytes, op2_sector_buf, chunk);
+		} else {
+			if (chunk < EMMC_SECTOR_SIZE) {
+				int rc = op2_emmc_read_retry((uint32_t)lba, op2_sector_buf);
+				if (rc) {
+					op2_emmc_fail_rd++;
+					op2_emmc_fail_record('m', lba, rc, (uint64_t)buf_blkno(bp), count);
+					if (op2_emmc_fail_rd <= 8) {
+						printf("OP2 eMMC FAIL rmw-read: lba=%llu rc=%d rd_fail=%llu\n",
+						    (unsigned long long)lba, rc,
+						    (unsigned long long)op2_emmc_fail_rd);
+					}
+					error = EIO;
+					break;
+				}
+				memcpy(op2_sector_buf, vaddr + done_bytes, chunk);
+				error = op2_emmc_write_retry((uint32_t)lba, op2_sector_buf);
+			} else {
+				error = op2_emmc_write_retry((uint32_t)lba, (const uint8_t *)(vaddr + done_bytes));
+			}
+			if (error) {
+				op2_emmc_fail_wr++;
+				op2_emmc_fail_record('W', lba, error, (uint64_t)buf_blkno(bp), count);
+				if (op2_emmc_fail_wr <= 8) {
+					printf("OP2 eMMC FAIL write: lba=%llu rc=%d wr_fail=%llu\n",
+					    (unsigned long long)lba, error,
+					    (unsigned long long)op2_emmc_fail_wr);
+				}
+				error = EIO;
+				break;
+			}
+			static uint64_t op2_emmc_write_blocks = 0;
+			op2_emmc_write_blocks++;
+			if (op2_emmc_write_blocks == 1 || (op2_emmc_write_blocks % 50000) == 0) {
+				printf("OP2 eMMC: blocks written=%llu (last LBA=%llu)\n",
+				    (unsigned long long)op2_emmc_write_blocks, (unsigned long long)lba);
+			}
+		}
 		buf_setresid(bp, count - (done_bytes + chunk));
 	}
 	if (op2_emmc_lock) lck_mtx_unlock(op2_emmc_lock);
@@ -584,13 +904,13 @@ static int op2_emmc_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused
 		*o = op2_emmc.nblocks;
 		return 0;
 	case DKIOCISWRITABLE:
-		*f = 0;
+		*f = op2_emmc_writable ? 1 : 0;
 		return 0;
 	case DKIOCGETMAXBLOCKCOUNTREAD:
 		*o = 2048; /* 1 MB */
 		return 0;
 	case DKIOCGETMAXBLOCKCOUNTWRITE:
-		*o = 0;
+		*o = op2_emmc_writable ? 2048 : 0;
 		return 0;
 	case DKIOCGETMAXSEGMENTCOUNTREAD:
 	case DKIOCGETMAXSEGMENTCOUNTWRITE:
@@ -621,9 +941,12 @@ static int op2_emmc_read(dev_t dev, struct uio *uio, __unused int ioflag)
 	return physio(op2_emmc_strategy, NULL, dev, B_READ, minphys, uio, (int)op2_emmc.secsize);
 }
 
-static int op2_emmc_write(__unused dev_t dev, __unused struct uio *uio, __unused int ioflag)
+static int op2_emmc_write(dev_t dev, struct uio *uio, __unused int ioflag)
 {
-	return EROFS;
+	if (!op2_emmc_writable) {
+		return EROFS;
+	}
+	return physio(op2_emmc_strategy, NULL, dev, B_WRITE, minphys, uio, (int)op2_emmc.secsize);
 }
 
 static struct bdevsw op2_emmc_bdevsw = {
@@ -657,6 +980,13 @@ static int op2_emmc_init(void)
 {
 	char want[64] = "userdata";
 	PE_parse_boot_argn("emmcroot", want, sizeof(want));
+
+	int rw = 1;
+	PE_parse_boot_argn("emmcrw", &rw, sizeof(rw));
+	if (rw != 0) {
+		op2_emmc_writable = 1;
+		printf("OP2 eMMC: write support ENABLED for partition \"%s\"\n", want);
+	}
 
 	op2_emmc.regs = ml_io_map(SDHC_REG_BASE, 0x200);
 	op2_emmc.core_regs = ml_io_map(SDHC_CORE_BASE, 0x800);

@@ -832,20 +832,67 @@ struct op2_ramoops_buffer {
 };
 static volatile struct op2_ramoops_buffer *g_ramoops_buf = NULL;
 
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+/* AP scratch pointer (B17): the console ring never touches bytes past
+ * header + OP2_RAMOOPS_CAPACITY. The AP mirrors its progress crumbs
+ * here (device mapping = uncached = DRAM-visible without cleaning),
+ * so a wedge that kills cpu0 before it can report is still readable
+ * from recovery via the ramoops pull. */
+volatile uint64_t *op2_ramoops_scratch(void);
+volatile uint64_t *
+op2_ramoops_scratch(void)
+{
+	if (g_ramoops_buf == NULL) {
+		return NULL;
+	}
+	/* +260016: past header + ring, rounded to 8 (device memory
+	 * faults on under-aligned 8B accesses: B17 lesson). */
+	return (volatile uint64_t *)((vm_offset_t)g_ramoops_buf + 260016);
+}
+/* AP console line (B18): lock-free char writes into the same ring.
+ * Races with cpu0's kprintf at worst interleave bytes; the AP's step
+ * tags remain readable from recovery even if both cores die. */
+void op2_ramoops_ap_write(const char *s);
+static void op2_ramoops_td0(int c);
+void
+op2_ramoops_ap_write(const char *s)
+{
+	if (g_ramoops_buf == NULL || s == NULL) {
+		return;
+	}
+	while (*s != '\0') {
+		op2_ramoops_td0((int)(unsigned char)*s);
+		s++;
+	}
+	__asm__ volatile("dsb sy" ::: "memory");
+}
+#endif
+
 static int op2_ramoops_tr0(void) { return 1; }
 static int op2_ramoops_rr0(void) { return 0; }
 static int op2_ramoops_rd0(void) { return 0; }
+#define OP2_RAMOOPS_CAPACITY 260000
+
 static void op2_ramoops_td0(int c)
 {
 	if (!g_ramoops_buf) return;
+	uint32_t start = g_ramoops_buf->start;
 	uint32_t sz = g_ramoops_buf->size;
-	if (sz < 260000) {
-		g_ramoops_buf->data[sz] = (char)c;
-		__asm__ volatile("dmb oshst" ::: "memory");
-		g_ramoops_buf->start = sz + 1;
-		g_ramoops_buf->size = sz + 1;
-		__asm__ volatile("dmb oshst" ::: "memory");
+
+	if (start >= OP2_RAMOOPS_CAPACITY) {
+		start = 0;
 	}
+	g_ramoops_buf->data[start] = (char)c;
+	start++;
+	if (start >= OP2_RAMOOPS_CAPACITY) {
+		start = 0;
+	}
+	if (sz < OP2_RAMOOPS_CAPACITY) {
+		sz++;
+	}
+	g_ramoops_buf->start = start;
+	g_ramoops_buf->size = sz;
+	__asm__ volatile("dmb oshst" ::: "memory");
 }
 static void op2_ramoops_init(void)
 {

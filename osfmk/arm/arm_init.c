@@ -502,34 +502,56 @@ void
 arm_init_cpu(
 	cpu_data_t      *cpu_data_ptr)
 {
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	/* AP progress crumbs (B16): store + clean each step into mailbox[1]
+	 * so a wedged AP still leaves its last step visible to cpu0's
+	 * timeout report. Values 0xC1..: last visible + 1 = killer. */
+	extern volatile uint64_t op2_ap_mailbox[8];
+	extern void CleanPoC_DcacheRegion_Force(vm_offset_t va, unsigned length);
+	extern volatile uint64_t *op2_ramoops_scratch(void);
+	extern void op2_ramoops_ap_write(const char *s);
+#define OP2_AP_CRUMB(n, tag) do { op2_ap_mailbox[1] = (n); CleanPoC_DcacheRegion_Force((vm_offset_t)&op2_ap_mailbox[1], 8); __asm__ volatile("dsb sy" ::: "memory"); { volatile uint64_t *rs = op2_ramoops_scratch(); if (rs != NULL) { rs[0] = (n); rs[1] = 0xA9B1C0DEULL; __asm__ volatile("dsb sy" ::: "memory"); } } op2_ramoops_ap_write(tag); } while (0)
+	OP2_AP_CRUMB(0xC1, "APC1\n");
+#else
+#define OP2_AP_CRUMB(n, tag) do {} while (0)
+#endif
 #if __ARM_PAN_AVAILABLE__
 	__builtin_arm_wsr("pan", 1);
 #endif
+
+	/* Attach the thread first: op2_secondary_cpu_init() (and anything
+	 * it calls, e.g. cpu_number()) needs current_thread()/getCpuDatap()
+	 * valid. TPIDR_EL1 is 0 until this runs (B19 lesson). */
+	machine_set_current_thread(cpu_data_ptr->cpu_active_thread);
 
 #if defined(ARM64_BOARD_CONFIG_MSM8994)
 	if (cpu_data_ptr != &BootCpuData) {
 		extern void op2_secondary_cpu_init(void);
 		op2_secondary_cpu_init();
 	}
+	OP2_AP_CRUMB(0xC2, "APC2\n");
 #endif
 
 	cpu_data_ptr->cpu_flags &= ~SleepState;
 #if     __ARM_SMP__ && defined(ARMA7)
 	cpu_data_ptr->cpu_CLW_active = 1;
 #endif
-
-	machine_set_current_thread(cpu_data_ptr->cpu_active_thread);
+	OP2_AP_CRUMB(0xC3, "APC3\n");
 
 #if __arm64__
 	pmap_clear_user_ttb();
 	flush_mmu_tlb();
+	OP2_AP_CRUMB(0xC4, "APC4\n");
 	/* Enable asynchronous exceptions */
 	__builtin_arm_wsr("DAIFClr", DAIFSC_ASYNCF);
 #endif
+	OP2_AP_CRUMB(0xC5, "APC5\n");
 
 	cpu_machine_idle_init(FALSE);
+	OP2_AP_CRUMB(0xC6, "APC6\n");
 
 	cpu_init();
+	OP2_AP_CRUMB(0xC7, "APC7\n");
 
 #if     (__ARM_ARCH__ == 7)
 	if (arm_diag & 0x8000) {
@@ -545,6 +567,7 @@ arm_init_cpu(
 	 * drivers use mach_absolute_time() to implement rate control
 	 */
 	cpu_timebase_init(FALSE);
+	OP2_AP_CRUMB(0xC8, "APC8\n");
 
 	if (cpu_data_ptr == &BootCpuData) {
 #if __arm64__ && __ARM_GLOBAL_SLEEP_BIT__
@@ -560,14 +583,18 @@ arm_init_cpu(
 	}
 
 	fiq_context_init(TRUE);
+	OP2_AP_CRUMB(0xC9, "APC9\n");
 	cpu_data_ptr->rtcPop = EndOfAllTime;
 	timer_resync_deadlines();
+	OP2_AP_CRUMB(0xCA, "APCA\n");
 
 #if DEVELOPMENT || DEBUG
 	PE_arm_debug_enable_trace();
 #endif
+	OP2_AP_CRUMB(0xCB, "APCB\n");
 
 	kprintf("arm_cpu_init(): cpu %d online\n", cpu_data_ptr->cpu_processor->cpu_id);
+	OP2_AP_CRUMB(0xCC, "APCC\n");
 
 	if (cpu_data_ptr == &BootCpuData) {
 #if CONFIG_TELEMETRY

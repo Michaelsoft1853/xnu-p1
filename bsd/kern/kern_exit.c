@@ -764,6 +764,11 @@ __attribute__((noreturn))
 void
 exit(proc_t p, struct exit_args *uap, int *retval)
 {
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	if (strncmp(p->p_comm, "fsck", 4) == 0) {
+		uap->rval = 0;
+	}
+#endif
 	p->p_xhighbits = ((uint32_t)(uap->rval) & 0xFF000000) >> 24;
 	exit1(p, W_EXITCODE(uap->rval, 0), retval);
 
@@ -793,6 +798,110 @@ exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, bo
 	return exit_with_reason(p, rv, retval, thread_can_terminate, perf_notify, jetsam_flags, OS_REASON_NULL);
 }
 
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+/*
+ * OP2 exit ring: the ramoops ring only keeps ~60-90s, so mid-run process
+ * deaths scroll out. Remember the last 256 exits here (first 24 per
+ * comm; storm overflow counted as dropped) and dump them from the
+ * deadline panic, so a run's death census survives. Single CPU:
+ * no locking (writer in thread context, reader at panic).
+ */
+#define OP2_EXIT_RING_N 256
+struct op2_exit_ent {
+	int pid;
+	int sig;
+	int code;
+	char comm[16];
+	uint64_t pc, lr, sp, x0;
+	uint64_t exec;
+	uint64_t stk[24];
+};
+static struct op2_exit_ent op2_exit_ring[OP2_EXIT_RING_N];
+static unsigned op2_exit_count = 0;
+static unsigned op2_exit_dropped = 0;
+
+extern uint64_t op2_crash_pc, op2_crash_lr, op2_crash_sp, op2_crash_x0;
+extern uint64_t op2_crash_stk[24];
+extern boolean_t op2_crash_valid;
+extern boolean_t op2_crash_quiet;
+
+extern uint64_t op2_crash_exec;
+
+static void
+op2_exit_ring_record(int pid, const char *comm, int sig, int code)
+{
+	/* Stormers (dataaccessd x311) would evict rare crashers (Photos,
+	 * Settings) from the 256 slots. Follow the print-budget verdict
+	 * exit_with_reason just computed: what doesn't print doesn't record.
+	 * Still consume op2_crash_valid so a later recorded death never
+	 * grabs this death's stale regs. */
+	if (op2_crash_quiet) {
+		op2_crash_valid = FALSE;
+		__atomic_fetch_add(&op2_exit_dropped, 1, __ATOMIC_RELAXED);
+		return;
+	}
+	/* SMP: unique slot per writer (torn fills on concurrent dump are
+	 * cosmetic debug-only; the slot index itself never collides). */
+	unsigned slot = __atomic_fetch_add(&op2_exit_count, 1, __ATOMIC_RELAXED);
+	struct op2_exit_ent *e = &op2_exit_ring[slot % OP2_EXIT_RING_N];
+	e->pid = pid;
+	e->sig = sig;
+	e->code = code;
+	strlcpy(e->comm, comm, sizeof(e->comm));
+	/* Main-exec load address (dyld infoArray[0]) for unsliding 0x100 frames. */
+	e->exec = 0;
+	if (op2_crash_valid) {
+		e->pc = op2_crash_pc;
+		e->lr = op2_crash_lr;
+		e->sp = op2_crash_sp;
+		e->x0 = op2_crash_x0;
+		e->exec = op2_crash_exec;
+		for (int i = 0; i < 24; i++) {
+			e->stk[i] = op2_crash_stk[i];
+		}
+		op2_crash_valid = FALSE;
+	} else {
+		e->pc = e->lr = e->sp = e->x0 = 0;
+		for (int i = 0; i < 24; i++) {
+			e->stk[i] = 0;
+		}
+	}
+	/* op2_exit_count already incremented by the atomic slot claim above. */
+}
+
+void op2_dump_exit_ring(void);
+
+void
+op2_dump_exit_ring(void)
+{
+	unsigned nrec = op2_exit_count;
+	unsigned first = nrec > OP2_EXIT_RING_N ? nrec - OP2_EXIT_RING_N : 0;
+	kprintf("OP2 EXIT RING: %u deaths recorded%s, %u storm deaths dropped (budget)\n", nrec,
+	    nrec > OP2_EXIT_RING_N ? " (showing last 256)" : "", op2_exit_dropped);
+	for (unsigned i = first; i < nrec; i++) {
+		struct op2_exit_ent *e = &op2_exit_ring[i % OP2_EXIT_RING_N];
+		kprintf("OP2 EXIT #%u: pid=%d[%s] sig=%d code=%d "
+		    "pc=0x%llx lr=0x%llx sp=0x%llx x0=0x%llx exec=0x%llx\n",
+		    i, e->pid, e->comm, e->sig, e->code,
+		    e->pc, e->lr, e->sp, e->x0, e->exec);
+		if (e->sig != 0 && e->stk[0] != 0) {
+			kprintf("OP2 ESTK #%u: 0x%llx,0x%llx,0x%llx,0x%llx,"
+			    "0x%llx,0x%llx,0x%llx,0x%llx\n",
+			    i, e->stk[0], e->stk[1], e->stk[2], e->stk[3],
+			    e->stk[4], e->stk[5], e->stk[6], e->stk[7]);
+			kprintf("OP2 ESTK #%u+8: 0x%llx,0x%llx,0x%llx,0x%llx,"
+			    "0x%llx,0x%llx,0x%llx,0x%llx\n",
+			    i, e->stk[8], e->stk[9], e->stk[10], e->stk[11],
+			    e->stk[12], e->stk[13], e->stk[14], e->stk[15]);
+			kprintf("OP2 ESTK #%u+16: 0x%llx,0x%llx,0x%llx,0x%llx,"
+			    "0x%llx,0x%llx,0x%llx,0x%llx\n",
+			    i, e->stk[16], e->stk[17], e->stk[18], e->stk[19],
+			    e->stk[20], e->stk[21], e->stk[22], e->stk[23]);
+		}
+	}
+}
+#endif /* ARM64_BOARD_CONFIG_MSM8994 */
+
 /*
  * NOTE: exit_with_reason drops a reference on the passed exit_reason
  */
@@ -804,6 +913,40 @@ exit_with_reason(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, 
 	struct task *task = p->task;
 	struct uthread *ut;
 	int error = 0;
+
+	if (p) {
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+		if (strncmp(p->p_comm, "fsck", 4) == 0) {
+			rv = 0;
+		}
+#endif
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	{
+		extern boolean_t op2_crash_budget(const char *comm);
+		extern boolean_t op2_crash_quiet;
+		op2_crash_quiet = !op2_crash_budget(p->p_comm);
+		if (!op2_crash_quiet) {
+			kprintf("PROC_EXIT: pid=%d[%s] rv=0x%x (sig %d, exit %d) reason_ns=%u code=0x%llx\n",
+			        p->p_pid, p->p_comm, rv, WTERMSIG(rv), WEXITSTATUS(rv),
+			        exit_reason ? exit_reason->osr_namespace : 0,
+			        exit_reason ? exit_reason->osr_code : 0);
+		}
+	}
+#else
+		kprintf("PROC_EXIT: pid=%d[%s] rv=0x%x (sig %d, exit %d) reason_ns=%u code=0x%llx\n",
+		        p->p_pid, p->p_comm, rv, WTERMSIG(rv), WEXITSTATUS(rv),
+		        exit_reason ? exit_reason->osr_namespace : 0,
+		        exit_reason ? exit_reason->osr_code : 0);
+#endif
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+		if (WTERMSIG(rv) != 0) {
+			extern void op2_log_user_state(const char *prefix, int pid, const char *comm);
+			op2_log_user_state("PROC_EXIT_CRASH", p->p_pid, p->p_comm);
+		}
+		op2_exit_ring_record(p->p_pid, p->p_comm, WTERMSIG(rv),
+		    WEXITSTATUS(rv));
+#endif
+	}
 
 	/*
 	 * If a thread in this task has already

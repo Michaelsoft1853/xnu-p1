@@ -5496,6 +5496,15 @@ task_set_phys_footprint_limit_internal(
 		*old_limit_mb = (int)(old >> 20);
 	}
 
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	/* OnePlus 2 has 4GB DRAM. iOS 12 N56 plists impose 36MB InactiveHard limits
+	 * (e.g. assistivetouchd), causing fatal jetsam kills when over 1.8GB is free.
+	 * Clamp limits < 256MB up to 256MB to prevent killing critical UI daemons. */
+	if (new_limit_mb > 0 && new_limit_mb < 256) {
+		new_limit_mb = 256;
+	}
+#endif
+
 	if (new_limit_mb == -1) {
 		/*
 		 * Caller wishes to remove the limit.

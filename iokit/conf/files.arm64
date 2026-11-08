@@ -9,3 +9,8 @@ iokit/Kernel/arm/OP2InterruptController.cpp			optional iokitcpp
 iokit/Kernel/arm/OP2CPU.cpp					optional iokitcpp
 iokit/Kernel/arm/OP2KeyStore.cpp				optional iokitcpp
 iokit/Kernel/arm/OP2Watchdog.cpp				optional iokitcpp
+iokit/Kernel/arm/OP2Surface.cpp					optional iokitcpp
+iokit/Kernel/arm/OP2Framebuffer.cpp				optional iokitcpp
+iokit/Kernel/arm/OP2Digitizer.cpp				optional iokitcpp
+iokit/Kernel/arm/OP2I2C.cpp					optional iokitcpp
+

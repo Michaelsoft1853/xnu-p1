@@ -2324,6 +2324,77 @@ is_io_service_match_property_table_bin(
 	return internal_io_service_match_property_table(service, matching, matchingCnt, matches);
 }
 
+#include <pexpert/pexpert.h>
+#include <pexpert/arm64/board_config.h>
+
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+/*
+ * OnePlus 2 IOKit trace: registry and matching calls made by the processes
+ * named in boot-arg op2iolog (comma separated, default "backboardd,SpringBoard";
+ * "-" turns it off) are printed as "IOK name: ...", at most 400 lines per
+ * boot.
+ */
+static char op2_iolog_names[128];
+static int op2_iolog_parsed;
+static uint32_t op2_iolog_lines;
+
+static bool
+op2_iolog(char *name, size_t len)
+{
+	if (!op2_iolog_parsed) {
+		if (!PE_parse_boot_argn("op2iolog", op2_iolog_names, sizeof(op2_iolog_names))) {
+			strlcpy(op2_iolog_names, "backboardd,SpringBoard", sizeof(op2_iolog_names));
+		}
+		op2_iolog_parsed = 1;
+	}
+	if (op2_iolog_lines >= 400) {
+		return false;
+	}
+	proc_selfname(name, (int)len);
+	size_t n = strlen(name);
+	for (const char *t = op2_iolog_names; *t;) {
+		const char *end = strchr(t, ',');
+		size_t tl = end ? (size_t)(end - t) : strlen(t);
+		if (tl == n && n > 0 && strncmp(t, name, n) == 0) {
+			op2_iolog_lines++;
+			return true;
+		}
+		if (!end) {
+			break;
+		}
+		t = end + 1;
+	}
+	return false;
+}
+
+static bool
+op2_str_contains(const char *haystack, const char *needle)
+{
+	if (!haystack || !needle) return false;
+	size_t nlen = strlen(needle);
+	for (const char *p = haystack; *p; p++) {
+		if (strncmp(p, needle, nlen) == 0) return true;
+	}
+	return false;
+}
+
+static void
+op2_iolog_dict(const char *name, const char *what, OSObject *dict, const char *result)
+{
+	OSSerialize *ser = OSSerialize::withCapacity(256);
+	const char *text = "?";
+	if (ser != NULL && dict != NULL && dict->serialize(ser)) {
+		text = ser->text();
+	}
+	if (text != NULL &&
+	    !op2_str_contains(text, "IOAccelerator") &&
+	    !op2_str_contains(text, "AppleM2Scaler")) {
+		IOLog("IOK %s: %s %.240s -> %s\n", name, what, text, result);
+	}
+	OSSafeReleaseNULL(ser);
+}
+#endif
+
 static kern_return_t
 internal_io_service_get_matching_services(
 	mach_port_t master_port,
@@ -2343,7 +2414,23 @@ internal_io_service_get_matching_services(
 	obj = OSUnserializeXML(matching, matching_size);
 
 	if ((dict = OSDynamicCast( OSDictionary, obj))) {
-		*existing = IOUserIterator::withIterator(IOService::getMatchingServices( dict ));
+		OSIterator *found = IOService::getMatchingServices( dict );
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+		char sname[32];
+		if (op2_iolog(sname, sizeof(sname))) {
+			unsigned int count = 0;
+			if (found != NULL) {
+				while (found->getNextObject() != NULL) {
+					count++;
+				}
+				found->reset();
+			}
+			char res[16];
+			snprintf(res, sizeof(res), "%u found", count);
+			op2_iolog_dict(sname, "matching", dict, res);
+		}
+#endif
+		*existing = IOUserIterator::withIterator(found);
 		kr = kIOReturnSuccess;
 	} else {
 		kr = kIOReturnBadArgument;
@@ -2427,6 +2514,13 @@ internal_io_service_get_matching_service(
 	if ((dict = OSDynamicCast( OSDictionary, obj))) {
 		*service = IOService::copyMatchingService( dict );
 		kr = *service ? kIOReturnSuccess : kIOReturnNotFound;
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+		char sname[32];
+		if (op2_iolog(sname, sizeof(sname))) {
+			op2_iolog_dict(sname, "matching1", dict,
+			    *service ? (*service)->getMetaClass()->getClassName() : "none");
+		}
+#endif
 	} else {
 		kr = kIOReturnBadArgument;
 	}
@@ -3784,6 +3878,15 @@ is_io_service_open_extended(
 
 		res = service->newUserClient( owningTask, (void *) owningTask,
 		    connect_type, propertiesDict, &client );
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+		{
+			char sname[32];
+			if (op2_iolog(sname, sizeof(sname))) {
+				IOLog("IOK %s: open %s type %u -> 0x%x\n", sname,
+				    service->getMetaClass()->getClassName(), connect_type, res);
+			}
+		}
+#endif
 
 		if (propertiesDict) {
 			propertiesDict->release();

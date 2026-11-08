@@ -84,6 +84,49 @@
 #endif /* defined(KERNEL_INTEGRITY_KTRR) */
 .endmacro
 
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+/* OP2 gated park: if op2_ap_parksel == N, store N to the mailbox and
+ * sleep forever. One build bisects the secondary path across boots
+ * (op2_appark=N): cpu0 survival + mailbox==N proves the AP reached
+ * site N; death/move-on localizes the killer between sites.
+ * Uses x9/x10 only (dead at every site); preserves x0 (site 1). */
+.macro OP2_PARK_IF_EQ n
+	adrp	x9, EXT(op2_ap_parksel)@page
+	add		x9, x9, EXT(op2_ap_parksel)@pageoff
+	ldr		w10, [x9]
+	cmp		w10, #\n
+	b.ne		Lop2_park_next_\n
+	adrp	x9, EXT(op2_ap_mailbox)@page
+	add		x9, x9, EXT(op2_ap_mailbox)@pageoff
+	mov		w10, #\n
+	str		w10, [x9]
+	dsb		sy
+Lop2_park_sleep_\n:
+	wfe
+	b		Lop2_park_sleep_\n
+Lop2_park_next_\n:
+.endmacro
+/* Post-`br` variant for code executing the kernel mapping: PC is
+ * already KVA, so plain PC-relative addresses need NO conversion
+ * (converting again yields garbage and faults: B14 lesson). */
+.macro OP2_PARK_KVA_IF_EQ n
+	adrp	x9, EXT(op2_ap_parksel)@page
+	add		x9, x9, EXT(op2_ap_parksel)@pageoff
+	ldr		w10, [x9]
+	cmp		w10, #\n
+	b.ne		Lop2_park_next_\n
+	adrp	x9, EXT(op2_ap_mailbox)@page
+	add		x9, x9, EXT(op2_ap_mailbox)@pageoff
+	mov		w10, #\n
+	str		w10, [x9]
+	dsb		sy
+Lop2_park_sleep_\n:
+	wfe
+	b		Lop2_park_sleep_\n
+Lop2_park_next_\n:
+.endmacro
+#endif
+
 /*
  * Checks the reset handler for global and CPU-specific reset-assist functions,
  * then jumps to the reset handler with boot args and cpu data. This is copied
@@ -99,6 +142,9 @@
 	.globl EXT(LowResetVectorBase)
 LEXT(LowResetVectorBase)
 	// Preserve x0 for start_first_cpu, if called
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	OP2_PARK_IF_EQ 1
+#endif
 
 	// Unlock the core for debugging
 	msr		OSLAR_EL1, xzr
@@ -146,6 +192,9 @@ LEXT(LowResetVectorBase)
 Lskip_ktrr:
 #endif /* defined(KERNEL_INTEGRITY_KTRR)*/
 
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	OP2_PARK_IF_EQ 2
+#endif
 	// Process reset handlers
 	adrp	x19, EXT(ResetHandlerData)@page			// Get address of the reset handler data
 	add		x19, x19, EXT(ResetHandlerData)@pageoff
@@ -284,6 +333,34 @@ LEXT(op2_secondary_entry)
 	msr		DAIFSet, #0xf
 	msr		SPSel, #1
 	b		EXT(LowResetVectorBase)
+
+	/* AP mailbox scratch: MMU-off, position-independent, no stack.
+	 * Stores one magic to the mailbox and sleeps. The mailbox lives
+	 * in normal __DATA; the store address is PC-relative (adrp+add),
+	 * which is slide-invariant and needs no runtime patching (B8's
+	 * TEXT patch faulted on KTRR; PC-relative needs none). KTRR/R-XN
+	 * don't apply MMU-off (no PTEs), so the store itself is safe.
+	 * VBAR is parked on a local trap: any fault is contained. */
+	.align 2
+	.globl EXT(op2_ap_probe)
+LEXT(op2_ap_probe)
+	msr		DAIFSet, #0xf
+	msr		SPSel, #1
+	adr		x0, L_op2_ap_trap
+	msr		VBAR_EL1, x0
+	isb
+	adrp	x0, EXT(op2_ap_mailbox)@page
+	add		x0, x0, EXT(op2_ap_mailbox)@pageoff
+	mov		w1, #0xA9B1
+	movk	w1, #0xE001, lsl #16		/* magic 0xE001A9B1 */
+	str		w1, [x0]
+	dsb		sy
+L_op2_ap_sleep:
+	wfe
+	b		L_op2_ap_sleep
+L_op2_ap_trap:
+	wfe
+	b		L_op2_ap_trap
 #endif
 	.align 2
 	.globl EXT(resume_idle_cpu)
@@ -301,6 +378,21 @@ LEXT(start_cpu)
 
 	.align 2
 start_cpu:
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	/* B11 breadcrumb: first XNU-path instruction. Stores the reset
+	 * vector's own params (x20=bootargs PA, x21=cpu_data PA) plus
+	 * MPIDR. Register stores only: cannot fault by construction,
+	 * so a zero MPIDR slot proves death inside ResetVectorBase
+	 * (MPIDR match), nonzero proves start_cpu entry. */
+	adrp	x9, EXT(op2_ap_crumbs)@page
+	add		x9, x9, EXT(op2_ap_crumbs)@pageoff
+	str		x20, [x9, #(0*8)]
+	str		x21, [x9, #(1*8)]
+	mrs		x10, MPIDR_EL1
+	str		x10, [x9, #(2*8)]
+	dsb		sy
+	OP2_PARK_IF_EQ 3
+#endif
 #if defined(KERNEL_INTEGRITY_KTRR)
 	// This is done right away in reset vector for pre-KTRR devices
 	// Set low reset vector now that we are in the KTRR-free zone
@@ -630,6 +722,9 @@ Linvalidate_bootstrap:							// do {
  *	TPIDRRO_EL0 - CPU number
  */
 common_start:
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	OP2_PARK_IF_EQ 4
+#endif
 	// Set the translation control register.
 	adrp	x0,     EXT(sysreg_restore)@page		// Load TCR value from the system register restore structure
 	add		x0, x0, EXT(sysreg_restore)@pageoff
@@ -733,9 +828,23 @@ common_start:
 
 
 #if defined(ARM64_BOARD_CONFIG_MSM8994)
-	/* Complete local TLB/I-cache invalidation before enabling the MMU. */
+	/* AP-only stale-state purge (x21 == cpu_data PA, nonzero only on
+	 * the start_cpu path; cpu0 cold boot skips everything here,
+	 * including the site-5 park).
+	 * No CPUECTLR/SMPEN access: NS-EL1 cannot touch it (traps to EL3);
+	 * TrustZone owns coherency and sets SMPEN during SCM bringup.
+	 * TLB + I-cache invalidate only. No D-cache set/way loop: the
+	 * earlier `dc isw` loop encoded the wrong level (bit value 2 is
+	 * L2, not L1) and a 32-bit way shift, so it discarded arbitrary
+	 * shared-L2 lines holding cpu0's live data. TZ resets the AP's L1
+	 * clean on this bringup path, so no D purge is needed. */
+	cbz		x21, Lop2_dinv_skip
+	tlbi	vmalle1
+	ic		iallu
 	dsb		sy
 	isb
+	OP2_PARK_IF_EQ 5
+Lop2_dinv_skip:
 #endif
 
 	// Enable caches and MMU
@@ -744,6 +853,30 @@ common_start:
 	orr		x0, x0, x1
 	MSR_SCTLR_EL1_X0
 	isb		sy
+
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	/* Site 6 (post-MMU): MMU is on with V=P + kernel mappings; convert
+	 * the PC-relative PA to KVA via x22/x23 (live: used at VBAR setup
+	 * above) before storing, so the store uses the kernel mapping. */
+	adrp	x9, EXT(op2_ap_parksel)@page
+	add		x9, x9, EXT(op2_ap_parksel)@pageoff
+	add		x9, x9, x22
+	sub		x9, x9, x23
+	ldr		w10, [x9]
+	cmp		w10, #6
+	b.ne		Lop2_park_next_6
+	adrp	x9, EXT(op2_ap_mailbox)@page
+	add		x9, x9, EXT(op2_ap_mailbox)@pageoff
+	add		x9, x9, x22
+	sub		x9, x9, x23
+	mov		w10, #6
+	str		w10, [x9]
+	dsb		sy
+Lop2_park_sleep_6:
+	wfe
+	b		Lop2_park_sleep_6
+Lop2_park_next_6:
+#endif
 
 #if (!CONFIG_KERNEL_INTEGRITY || (CONFIG_KERNEL_INTEGRITY && !defined(KERNEL_INTEGRITY_WT)))
 	/* Watchtower
@@ -760,6 +893,10 @@ common_start:
 	// Clear thread pointer
 	mov		x0, #0
 	msr		TPIDR_EL1, x0						// Set thread register
+
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	OP2_PARK_IF_EQ 7
+#endif
 
 #if defined(APPLE_ARM64_ARCH_FAMILY)
 	// Initialization common to all Apple targets
@@ -1009,6 +1146,9 @@ Ltrampoline:
 	.text
 	.align 2
 arm_init_tramp:
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	OP2_PARK_KVA_IF_EQ 8
+#endif
 	/* On a warm boot, the full kernel translation table is initialized in
 	 * addition to the bootstrap tables. The layout is as follows:
 	 *
@@ -1043,10 +1183,31 @@ arm_init_tramp:
 	mov		x0, x21
 	bl		EXT(phystokv)
 
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	/* Site 9: capture LR (the ret target) into crumbs[3], then
+	 * park if selected. PC is KVA here: no conversion. */
+	adrp	x9, EXT(op2_ap_crumbs)@page
+	add		x9, x9, EXT(op2_ap_crumbs)@pageoff
+	str		x19, [x9, #(3*8)]
+	dsb		sy
+	OP2_PARK_KVA_IF_EQ 9
+#endif
+
 	mov		lr, x19
 
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	/* Enter the AP online path directly (x0 = cpu_data VA from
+	 * phystokv above). The stock `ret` targets LR, which on this
+	 * warm-kick path points at the reset vector's hang loop.
+	 * arm_init_cpu never returns; park defensively if it does. */
+	bl		EXT(arm_init_cpu)
+Lop2_ap_returned:
+	wfe
+	b		Lop2_ap_returned
+#else
 	/* Return to arm_init() */
 	ret
+#endif
 
 //#include	"globals_asm.h"
 

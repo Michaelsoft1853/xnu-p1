@@ -85,6 +85,44 @@
 #include <vm/vm_kern.h>         /* for kernel_map */
 
 #include <pexpert/pexpert.h>    /* for PE_parse_boot_argn */
+#include <pexpert/arm64/board_config.h>
+#include <libkern/libkern.h>
+
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+/*
+ * OnePlus 2: daemons started by launchd write stdout/stderr to /dev/null.
+ * What the processes named in boot-arg op2null (comma separated,
+ * default "backboardd,SpringBoard") write to /dev/null goes to the
+ * console as "|name| text". op2null=- turns it off.
+ */
+static char op2_null_names[128];
+static int op2_null_parsed;
+
+static bool
+op2_null_tee(char *name, size_t len)
+{
+	if (!op2_null_parsed) {
+		if (!PE_parse_boot_argn("op2null", op2_null_names, sizeof(op2_null_names))) {
+			strlcpy(op2_null_names, "backboardd,SpringBoard", sizeof(op2_null_names));
+		}
+		op2_null_parsed = 1;
+	}
+	proc_selfname(name, (int)len);
+	size_t n = strlen(name);
+	for (const char *t = op2_null_names; *t;) {
+		const char *end = strchr(t, ',');
+		size_t tl = end ? (size_t)(end - t) : strlen(t);
+		if (tl == n && n > 0 && strncmp(t, name, n) == 0) {
+			return true;
+		}
+		if (!end) {
+			break;
+		}
+		t = end + 1;
+	}
+	return false;
+}
+#endif
 
 boolean_t iskmemdev(dev_t dev);
 
@@ -214,6 +252,34 @@ mmrw(dev_t dev, struct uio *uio, enum uio_rw rw)
 			if (rw == UIO_READ) {
 				return 0;
 			}
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+			{
+				char name[32];
+				static int op2_userlog_parsed = 0;
+				static uint32_t op2_userlog = 1;
+				if (!op2_userlog_parsed) {
+					op2_userlog_parsed = 1;
+					PE_parse_boot_argn("op2_userlog",
+					    &op2_userlog, sizeof(op2_userlog));
+				}
+				if (op2_userlog &&
+				    op2_null_tee(name, sizeof(name))) {
+					char buf[256];
+					c = MIN(uio_curriovlen(uio), sizeof(buf) - 1);
+					error = uiomove(buf, (int)c, uio);
+					if (error) {
+						break;
+					}
+					buf[c] = '\0';
+					if (strnstr(buf, "AppleM2ScalerCSCDriver", c) == NULL &&
+					    !(c == 1 && (buf[0] == '\n' || buf[0] == '\r'))) {
+						printf("|%s| %.*s%s", name, (int)c, buf,
+						    (c > 0 && buf[c - 1] == '\n') ? "" : "\n");
+					}
+					continue;
+				}
+			}
+#endif
 			c = uio_curriovlen(uio);
 
 			error = 0; /* Always succeeds, always consumes all input */

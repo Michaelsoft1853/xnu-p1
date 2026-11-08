@@ -12030,16 +12030,50 @@ vm_map_fork_share(
 		VME_OFFSET_SET(old_entry, 0);
 		VME_OBJECT_SET(old_entry, object);
 		old_entry->use_pmap = TRUE;
+		/*
+		 * OP2: the fresh zero object satisfies any pending
+		 * deferred copy, so clear the flag instead of cloning
+		 * a stale needs_copy into the child (see below).
+		 */
+		old_entry->needs_copy = FALSE;
 //		assert(!old_entry->needs_copy);
 	} else if (object->copy_strategy !=
 	    MEMORY_OBJECT_COPY_SYMMETRIC) {
 		/*
 		 *	We are already using an asymmetric
 		 *	copy, and therefore we already have
-		 *	the right object.
+		 *	the right object -- unless a deferred
+		 *	copy is still pending (needs_copy), e.g.
+		 *	after vm_remap() flipped the strategy to
+		 *	DELAY and vm_protect(VM_PROT_COPY) set the
+		 *	flag (see the #if 0 note in vm_object_shadow,
+		 *	which handles asymmetric sources fine).
+		 *	Two entries must never share one pending
+		 *	deferred copy, so complete it here the same
+		 *	way case 1 does.  COPY_NONE (purgeable)
+		 *	objects cannot take a shadow; their contents
+		 *	are discardable, so just drop the flag.
+		 *	(OP2: hit live when a fresh logd forks;
+		 *	the old assert(!needs_copy) panicked long runs.)
 		 */
-
-		assert(!old_entry->needs_copy);
+		if (old_entry->needs_copy) {
+			if (object->copy_strategy ==
+			    MEMORY_OBJECT_COPY_NONE) {
+				printf("OP2 VM: fork with needs_copy on "
+				    "COPY_NONE entry %p, clearing\n",
+				    old_entry);
+				old_entry->needs_copy = FALSE;
+			} else {
+				printf("OP2 VM: completing deferred copy "
+				    "on asymmetric fork (entry %p)\n",
+				    old_entry);
+				VME_OBJECT_SHADOW(old_entry,
+				    (vm_map_size_t)(old_entry->vme_end -
+				    old_entry->vme_start));
+				old_entry->needs_copy = FALSE;
+				object = VME_OBJECT(old_entry);
+			}
+		}
 	} else if (old_entry->needs_copy ||       /* case 1 */
 	    object->shadowed ||                 /* case 2 */
 	    (!object->true_share &&             /* case 3 */

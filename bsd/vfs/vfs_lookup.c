@@ -473,7 +473,6 @@ error_out:
 		goto vnode_recycled;
 	}
 
-
 	return error;
 }
 

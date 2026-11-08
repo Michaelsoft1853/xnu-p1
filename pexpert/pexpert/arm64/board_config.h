@@ -181,7 +181,10 @@
 #include <pexpert/arm64/MSM8994.h>
 #define __ARM_L2CACHE_SIZE_LOG__ 21
 #define ARM_BOARD_CLASS_MSM8994
-#define CPU_COUNT 1
+/* SMP step 1: cpu0+cpu1. Must cover every /cpus node in the ADT or
+ * ml_parse_cpu_topology's assert(cpu_id < MAX_CPUS) fires in early
+ * boot (probe-A hang). Single-core runs still gate via `cpus=1`. */
+#define CPU_COUNT 2
 #define CORE_NCTRS 6
 #endif  /* ARM64_BOARD_CONFIG_MSM8994 */
 

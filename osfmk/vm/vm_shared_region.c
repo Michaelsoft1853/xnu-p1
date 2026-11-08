@@ -2915,6 +2915,9 @@ vm_shared_region_slide(uint32_t slide,
 	int                     error;
 	vm_shared_region_t      sr;
 
+	printf("OP2 SHARED_REGION: slide=0x%x entry_start=0x%llx entry_size=0x%llx slid_mapping=0x%llx\n",
+	       slide, (unsigned long long)entry_start_address, (unsigned long long)entry_size, (unsigned long long)slid_mapping);
+
 	SHARED_REGION_TRACE_DEBUG(
 		("vm_shared_region_slide: -> slide %#x, entry_start %#llx, entry_size %#llx, slide_start %#llx, slide_size %#llx\n",
 		slide, entry_start_address, entry_size, slide_start, slide_size));

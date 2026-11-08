@@ -58,6 +58,7 @@ osfmk/arm64/pcb.c		standard
 osfmk/arm/rtclock.c		standard
 osfmk/arm64/status.c		standard
 osfmk/arm/status_shared.c	standard
+osfmk/arm64/op2_snapshot.c	standard
 
 osfmk/arm/commpage/commpage.c	standard
 

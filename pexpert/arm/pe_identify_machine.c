@@ -346,11 +346,25 @@ op2_vtimer_set_decrementer(uint32_t dec_value)
 			    op2_deadline_sec, op2_start_cycles);
 		}
 	}
-	if (op2_deadline_sec > 0 && cpu_number() == 0) {
+	uint64_t tpidr = 0;
+	__asm__ volatile("mrs %0, TPIDR_EL1" : "=r"(tpidr));
+	/* TPIDR 0 on a not-yet-attached AP: cpu_number() would deref NULL
+	 * (B19 lesson). Only cpu0 ever has a zero cpu number anyway. */
+	if (op2_deadline_sec > 0 && tpidr != 0 && cpu_number() == 0) {
 		uint64_t now, freq;
 		__asm__ volatile("mrs %0, CNTVCT_EL0" : "=r"(now));
 		__asm__ volatile("mrs %0, CNTFRQ_EL0" : "=r"(freq));
 		if (now > op2_start_cycles && (now - op2_start_cycles) > (freq * (uint64_t)op2_deadline_sec)) {
+			extern void op2_dump_exit_ring(void);
+			extern void op2_dump_spawn_ring(void);
+			extern void op2_emmc_dump_stats(void);
+			extern void op2_fb_dump_stats(void);
+			extern void op2_cpu_dump_status(void);
+			op2_dump_exit_ring();
+			op2_dump_spawn_ring();
+			op2_emmc_dump_stats();
+			op2_fb_dump_stats();
+			op2_cpu_dump_status();
 			panic("OP2: software timer deadline exceeded (%u s); resetting\n", op2_deadline_sec);
 		}
 	}
@@ -864,16 +878,22 @@ void op2_secondary_cpu_init(void);
 
 void op2_secondary_cpu_init(void)
 {
+	/* B19 step tags: lock-free console lines so the exact killer MMIO
+	 * is readable from recovery even if both cores die. */
+	extern void op2_ramoops_ap_write(const char *s);
 	if (op2_gic_dist_base != 0) {
 		volatile uint32_t *gicd = (volatile uint32_t *)op2_gic_dist_base;
 		/* Group 1 (non-secure) for banked PPI vtimer and SGI 1 */
 		gicd[0x0080 / 4] |= (1U << op2_vtimer_intid) | (1U << 1);
+		op2_ramoops_ap_write("APG1\n");
 		volatile uint8_t *priority = (volatile uint8_t *)(op2_gic_dist_base + 0x0400);
 		priority[op2_vtimer_intid] = 0x80;
 		priority[1] = 0x80;
+		op2_ramoops_ap_write("APG2\n");
 		/* Enable banked PPI vtimer and SGI 1 */
 		gicd[0x0100 / 4] |= (1U << op2_vtimer_intid) | (1U << 1);
 		__asm__ volatile("dmb sy" ::: "memory");
+		op2_ramoops_ap_write("APG3\n");
 	}
 
 	if (op2_gic_cpu_base != 0) {
@@ -882,13 +902,15 @@ void op2_secondary_cpu_init(void)
 		gicc[0x0008 / 4] = 0;
 		gicc[0x0000 / 4] = 0xf;
 		__asm__ volatile("dmb sy" ::: "memory");
+		op2_ramoops_ap_write("APG4\n");
 	}
 
 	uint32_t init_tick = (uint32_t)(gPEClockFrequencyInfo.timebase_frequency_hz / 100);
 	if (init_tick == 0) init_tick = 192000;
 	op2_vtimer_set_decrementer(init_tick);
 	op2_vtimer_enable();
+	op2_ramoops_ap_write("APG5\n");
 
-	kprintf("OP2: Secondary CPU %d initialized GICv2 and vtimer\n", cpu_number());
+	kprintf("OP2: Secondary CPU 1 initialized GICv2 and vtimer\n");
 }
 #endif

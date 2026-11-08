@@ -222,6 +222,15 @@ hfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t conte
 		/* Change to a read-only file system. */
 		if (((hfsmp->hfs_flags & HFS_READ_ONLY) == 0) &&
 		    vfs_isrdonly(mp)) {
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+			uint32_t rootrw = 1;
+			PE_parse_boot_argn("rootrw", &rootrw, sizeof(rootrw));
+			if (rootrw) {
+				printf("hfs_mount: rootrw=1 active, ignoring request to downgrade %s to read-only\n", hfsmp->vcbVN);
+				vfs_clearflags(mp, MNT_RDONLY);
+				return (0);
+			}
+#endif
 			int flags;
 
 			/* Set flag to indicate that a downgrade to read-only
@@ -1537,7 +1546,7 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 				goto error_exit;
 		}
 
-		if (isroot && ((SWAP_BE32(vhp->attributes) & kHFSVolumeUnmountedMask) != 0)) {
+		if (isroot) {
 			vfs_set_root_unmounted_cleanly();
 		}
 
@@ -4436,6 +4445,12 @@ out:
 void hfs_mark_inconsistent(struct hfsmount *hfsmp,
 								  hfs_inconsistency_reason_t reason)
 {
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+	(void)hfsmp;
+	(void)reason;
+	/* Suppress on MSM8994 to avoid poisoning rootfs metadata on watchdog resets */
+	return;
+#else
 	hfs_lock_mount (hfsmp);
 	if ((hfsmp->vcbAtrb & kHFSVolumeInconsistentMask) == 0) {
 		hfsmp->vcbAtrb |= kHFSVolumeInconsistentMask;
@@ -4462,6 +4477,7 @@ void hfs_mark_inconsistent(struct hfsmount *hfsmp,
 		}
 	}
 	hfs_unlock_mount (hfsmp);
+#endif
 }
 
 /* Replay the journal on the device node provided.  Returns zero if

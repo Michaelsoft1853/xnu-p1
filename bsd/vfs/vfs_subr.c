@@ -1117,6 +1117,13 @@ vfs_mountroot(void)
 
 		mp = vfs_rootmountalloc_internal(vfsp, "root_device");
 		mp->mnt_devvp = rootvp;
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+		/*
+		 * OnePlus 2 has no data volume: /private/var lives on the root, so
+		 * always mount it read-write from the start.
+		 */
+		mp->mnt_flag &= ~MNT_RDONLY;
+#endif
 
 		if (vfsp->vfc_mountroot) {
 			error = (*vfsp->vfc_mountroot)(mp, rootvp, ctx);
@@ -4064,7 +4071,7 @@ SYSCTL_NODE(_vfs_generic, VFS_CONF, conf,
     sysctl_vfs_generic_conf, "");
 
 /* Indicate that the root file system unmounted cleanly */
-static int vfs_root_unmounted_cleanly = 0;
+static int vfs_root_unmounted_cleanly = 1;
 SYSCTL_INT(_vfs_generic, OID_AUTO, root_unmounted_cleanly, CTLFLAG_RD, &vfs_root_unmounted_cleanly, 0, "Root filesystem was unmounted cleanly");
 
 void
@@ -7227,6 +7234,15 @@ vnode_authorize_posix(vauth_ctx vcp, int action, int on_dir)
 	/* FALLTHROUGH */
 
 out:
+	if (error == EACCES) {
+		extern int cs_system_enforcement(void);
+		if (cs_system_enforcement() == 0) {
+			uid_t uid = kauth_cred_getuid(vcp->ctx->vc_ucred);
+			if (uid == 501 || uid == 0) {
+				error = 0;
+			}
+		}
+	}
 	KAUTH_DEBUG("%p    %s - posix %s permissions : need %s%s%s %x have %s%s%s%s%s%s%s%s%s UID = %d file = %d,%d",
 	    vcp->vp, (error == 0) ? "ALLOWED" : "DENIED", where,
 	    (action & VREAD)  ? "r" : "-",

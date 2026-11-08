@@ -58,6 +58,7 @@
 
 #include <sys/kdebug.h>
 #include <sys/sysctl.h>
+#include <sys/lockf.h>
 #include <stdbool.h>
 
 #include "hfs.h"
@@ -7397,7 +7398,7 @@ const struct vnodeopv_entry_desc hfs_vnodeop_entries[] = {
     { &vnop_reclaim_desc, (VOPFUNC)hfs_vnop_reclaim },		/* reclaim */
     { &vnop_strategy_desc, (VOPFUNC)hfs_vnop_strategy },		/* strategy */
     { &vnop_pathconf_desc, (VOPFUNC)hfs_vnop_pathconf },		/* pathconf */
-    { &vnop_advlock_desc, (VOPFUNC)err_advlock },		/* advlock */
+    { &vnop_advlock_desc, (VOPFUNC)lf_advlock },		/* advlock */
     { &vnop_allocate_desc, (VOPFUNC)hfs_vnop_allocate },		/* allocate */
 #if CONFIG_SEARCHFS
     { &vnop_searchfs_desc, (VOPFUNC)hfs_vnop_search },		/* search fs */
@@ -7459,7 +7460,7 @@ const struct vnodeopv_entry_desc hfs_specop_entries[] = {
 	{ &vnop_reclaim_desc, (VOPFUNC)hfs_vnop_reclaim },	/* reclaim */
 	{ &vnop_strategy_desc, (VOPFUNC)spec_strategy },		/* strategy */
 	{ &vnop_pathconf_desc, (VOPFUNC)spec_pathconf },		/* pathconf */
-	{ &vnop_advlock_desc, (VOPFUNC)err_advlock },		/* advlock */
+	{ &vnop_advlock_desc, (VOPFUNC)lf_advlock },		/* advlock */
 	{ &vnop_bwrite_desc, (VOPFUNC)hfs_vnop_bwrite },
 	{ &vnop_pagein_desc, (VOPFUNC)hfs_vnop_pagein },		/* Pagein */
 	{ &vnop_pageout_desc, (VOPFUNC)hfs_vnop_pageout },	/* Pageout */

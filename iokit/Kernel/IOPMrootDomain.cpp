@@ -382,6 +382,20 @@ uuid_string_t bootsessionuuid_string;
 
 static uint32_t         gDarkWakeFlags = kDarkWakeFlagHIDTickleNone;
 static uint32_t         gNoIdleFlag = 0;
+/*
+ * OP2 (ported from hakios): the system does not sleep. There is nothing
+ * here to sleep into and nothing that would wake it: with the screen
+ * locked, powerd asks for system sleep within seconds, and that request
+ * ends frozen (deadline timer stops, display black, no USB, no wake).
+ * Refused at the policy gate, the system stays awake. Our aggressiveness
+ * vetoes below remain as logging belt-and-suspenders.
+ * Boot-arg syssleep=1 gives the old behaviour back.
+ */
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+static uint32_t         gSleepDisabledFlag = 1;
+#else
+static uint32_t         gSleepDisabledFlag = 0;
+#endif
 static uint32_t         gSwdPanic = 0;
 static uint32_t         gSwdSleepTimeout = 0;
 static uint32_t         gSwdWakeTimeout = 0;
@@ -1170,6 +1184,13 @@ IOPMrootDomain::start( IOService * nub )
 
 	PE_parse_boot_argn("darkwake", &gDarkWakeFlags, sizeof(gDarkWakeFlags));
 	PE_parse_boot_argn("noidle", &gNoIdleFlag, sizeof(gNoIdleFlag));
+	{
+		uint32_t syssleep = 0;
+
+		if (PE_parse_boot_argn("syssleep", &syssleep, sizeof(syssleep)) && syssleep) {
+			gSleepDisabledFlag = 0;
+		}
+	}
 	PE_parse_boot_argn("swd_sleeptimeout", &gSwdSleepTimeout, sizeof(gSwdSleepTimeout));
 	PE_parse_boot_argn("swd_waketimeout", &gSwdWakeTimeout, sizeof(gSwdWakeTimeout));
 	PE_parse_boot_argn("swd_timeout", &gSwdSleepWakeTimeout, sizeof(gSwdSleepWakeTimeout));
@@ -6216,6 +6237,11 @@ IOPMrootDomain::checkSystemSleepAllowed( IOOptionBits options,
 	// Conditions that prevent idle and demand system sleep.
 
 	do {
+		if (gSleepDisabledFlag) {
+			err = 7; // 0. OP2/hakios: sleep refused at policy gate
+			break;
+		}
+
 		if (userDisabledAllSleep) {
 			err = 1; // 1. user-space sleep kill switch
 			break;
@@ -7000,6 +7026,24 @@ IOPMrootDomain::evaluatePolicy( int stimulus, uint32_t arg )
 		// Fetch latest display and system sleep slider values.
 		getAggressiveness(kPMMinutesToSleep, &minutesToIdleSleep);
 		getAggressiveness(kPMMinutesToDim, &minutesToDisplayDim);
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+		/* OP2: no working wake sources; idle sleep blanks the display
+		 * permanently (wake reason empty, display never re-enables).
+		 * Ignore powerd's idle-sleep request; stay awake. */
+		if (minutesToIdleSleep != 0) {
+			DLOG("OP2: vetoing idle sleep (%lu min requested)\n",
+			    minutesToIdleSleep);
+		}
+		minutesToIdleSleep = 0;
+		/* OP2: same for display dim (hakios MiniFB lesson: the panel
+		 * on these ports must never sleep - a dead display never
+		 * wakes (no tickle path), so any dim is permanent black. */
+		if (minutesToDisplayDim != 0) {
+			DLOG("OP2: vetoing display dim (%lu min requested)\n",
+			    minutesToDisplayDim);
+		}
+		minutesToDisplayDim = 0;
+#endif
 		DLOG("aggressiveness changed: system %u->%u, display %u\n",
 		    (uint32_t) sleepSlider,
 		    (uint32_t) minutesToIdleSleep,

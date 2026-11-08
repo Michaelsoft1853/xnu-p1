@@ -267,6 +267,7 @@ cs_invalid_page(addr64_t vaddr, boolean_t *cs_killed)
 	} else {
 		if (p->p_csflags & CS_VALID) {
 			p->p_csflags &= ~CS_VALID;
+			p->p_csflags |= CS_DEBUGGED;
 			cs_procs_invalidated++;
 			verbose = 1;
 		}

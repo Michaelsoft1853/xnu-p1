@@ -147,6 +147,151 @@ static void handle_simd_trap(arm_saved_state_t *, uint32_t esr);
 extern void mach_kauth_cred_uthread_update(void);
 void   mach_syscall_trace_exit(unsigned int retval, unsigned int call_number);
 
+extern int proc_selfpid(void);
+extern void proc_selfname(char * buf, int size);
+extern arm_saved_state_t *get_user_regs(thread_t);
+
+void op2_log_user_state(const char *prefix, int pid, const char *comm);
+boolean_t op2_crash_budget(const char *comm);
+
+/* Latest crash regs, consumed by the exit ring (single CPU: no locking). */
+uint64_t op2_crash_pc = 0, op2_crash_lr = 0, op2_crash_sp = 0, op2_crash_x0 = 0;
+uint64_t op2_crash_stk[24] = {0};
+uint64_t op2_crash_exec = 0;
+boolean_t op2_crash_valid = FALSE;
+
+/* Live-print budget: first 24 crash/exit prints per comm name. Stormers
+ * (assetsd x248, dataaccessd x311) would otherwise evict the TL history
+ * from the 260KB ring and rare crashers from the 256-slot exit ring.
+ * The exit ring follows the same verdict (see op2_exit_ring_record):
+ * first 24 per comm recorded, the rest counted as dropped. Table full
+ * fails open (prints + records) so new crashers are never silent. */
+#define OP2_PBUD_N 32
+#define OP2_PBUD_LIM 24
+static struct { char comm[16]; int n; } op2_pbud[OP2_PBUD_N];
+boolean_t op2_crash_quiet = FALSE;
+
+boolean_t
+op2_crash_budget(const char *comm)
+{
+	int free = -1;
+	for (int i = 0; i < OP2_PBUD_N; i++) {
+		if (op2_pbud[i].n == 0 && free < 0) {
+			free = i;
+		}
+		if (op2_pbud[i].n != 0 &&
+		    strncmp(op2_pbud[i].comm, comm, sizeof(op2_pbud[i].comm)) == 0) {
+			op2_pbud[i].n++;
+			return op2_pbud[i].n <= OP2_PBUD_LIM;
+		}
+	}
+	if (free >= 0) {
+		strlcpy(op2_pbud[free].comm, comm, sizeof(op2_pbud[free].comm));
+		op2_pbud[free].n = 1;
+		return TRUE;
+	}
+	return TRUE;
+}
+
+void
+op2_log_user_state(const char *prefix, int pid, const char *comm)
+{
+	thread_t th = current_thread();
+	if (!th) return;
+	arm_saved_state_t *state = get_user_regs(th);
+	if (!state || !is_saved_state64(state)) return;
+	arm_saved_state64_t *s64 = saved_state64(state);
+	op2_crash_pc = s64->pc;
+	op2_crash_lr = s64->lr;
+	op2_crash_sp = s64->sp;
+	op2_crash_x0 = s64->x[0];
+	op2_crash_exec = 0;
+	{
+		task_t ct = current_task();
+		uint64_t info = (ct != TASK_NULL) ?
+		    ct->all_image_info_addr : 0;
+		uint64_t arr = 0, ex = 0;
+		if (info != 0 &&
+		    copyin((user_addr_t)(info + 0x8), (char *)&arr,
+		    sizeof(arr)) == 0 && arr != 0 &&
+		    copyin((user_addr_t)arr, (char *)&ex,
+		    sizeof(ex)) == 0) {
+			op2_crash_exec = ex;
+		}
+	}
+	for (int i = 0; i < 24; i++) {
+		op2_crash_stk[i] = 0;
+	}
+	op2_crash_valid = TRUE;
+	/* Best-effort fp chain via copyin (user stack may be gone). */
+	uint64_t fp = s64->fp;
+	for (int i = 0; i < 24 && fp != 0; i++) {
+		uint64_t frame[2] = {0, 0};
+		if (copyin((user_addr_t)fp, (char *)frame, sizeof(frame)) != 0) {
+			break;
+		}
+		if (frame[1] == 0) {
+			break;
+		}
+		op2_crash_stk[i] = frame[1];
+		if (frame[0] == 0 || frame[0] <= fp) {
+			break;
+		}
+		fp = frame[0];
+	}
+	if (!op2_crash_quiet) {
+		kprintf("%s: pid=%d[%s] pc=0x%llx lr=0x%llx sp=0x%llx x0=0x%llx x1=0x%llx x16=0x%llx\n",
+		        prefix, pid, comm,
+		        (unsigned long long)s64->pc, (unsigned long long)s64->lr,
+		        (unsigned long long)s64->sp, (unsigned long long)s64->x[0],
+		        (unsigned long long)s64->x[1], (unsigned long long)s64->x[16]);
+	}
+}
+
+static inline void
+op2_log_user_trap(const char *tag, arm_saved_state_t *ss, uint64_t far, uint32_t esr, uint64_t code)
+{
+	char comm[32] = {0};
+	proc_selfname(comm, sizeof(comm));
+	if (!op2_crash_budget(comm)) {
+		return;
+	}
+	kprintf("%s: pid=%d[%s] pc=0x%llx far=0x%llx esr=0x%x code=0x%llx\n",
+	        tag, proc_selfpid(), comm,
+	        ss ? (unsigned long long)get_saved_state_pc(ss) : 0,
+	        (unsigned long long)far, esr, (unsigned long long)code);
+
+	if (ss && is_saved_state64(ss)) {
+		arm_saved_state64_t *s64 = saved_state64(ss);
+		kprintf("%s REGS: x0=0x%llx x1=0x%llx x2=0x%llx x3=0x%llx x4=0x%llx x8=0x%llx fp=0x%llx lr=0x%llx sp=0x%llx x16=0x%llx\n",
+		        tag,
+		        (unsigned long long)s64->x[0], (unsigned long long)s64->x[1],
+		        (unsigned long long)s64->x[2], (unsigned long long)s64->x[3],
+		        (unsigned long long)s64->x[4], (unsigned long long)s64->x[8],
+		        (unsigned long long)s64->fp,   (unsigned long long)s64->lr,
+		        (unsigned long long)s64->sp,   (unsigned long long)s64->x[16]);
+
+		if (s64->pc >= 8) {
+			uint32_t instrs[4] = {0};
+			if (copyin((user_addr_t)(s64->pc - 8), (char *)instrs, sizeof(instrs)) == 0) {
+				kprintf("%s CODE: [-8]=0x%08x [-4]=0x%08x [pc]=0x%08x [+4]=0x%08x\n",
+				        tag, instrs[0], instrs[1], instrs[2], instrs[3]);
+			}
+		}
+
+		uint64_t cur_fp = s64->fp;
+		kprintf("%s STACK: pc=0x%llx lr=0x%llx", tag, (unsigned long long)s64->pc, (unsigned long long)s64->lr);
+		for (int frame = 0; frame < 10 && cur_fp >= 0x100000000ULL && (cur_fp & 7) == 0; frame++) {
+			uint64_t frame_data[2] = {0};
+			if (copyin((user_addr_t)cur_fp, (char *)frame_data, sizeof(frame_data)) != 0) break;
+			kprintf(" -> 0x%llx", (unsigned long long)frame_data[1]);
+			if (frame_data[0] <= cur_fp) break;
+			cur_fp = frame_data[0];
+		}
+		kprintf("\n");
+	}
+}
+
 struct uthread;
 struct proc;
 
@@ -743,6 +888,10 @@ handle_uncategorized(arm_saved_state_t *state, boolean_t instrLen2)
 		}
 	}
 
+	if (PSR64_IS_USER64(get_saved_state_cpsr(state))) {
+		op2_log_user_trap("USER_BAD_INSTR", state, 0, 0, instr);
+	}
+
 	exception_triage(exception, codes, numcodes);
 	assert(0); /* NOTREACHED */
 }
@@ -755,6 +904,9 @@ handle_breakpoint(arm_saved_state_t *state)
 	mach_msg_type_number_t          numcodes = 2;
 
 	codes[1] = get_saved_state_pc(state);
+	if (state && PSR64_IS_USER64(get_saved_state_cpsr(state))) {
+		op2_log_user_trap("USER_BREAKPOINT", state, 0, 0, codes[0]);
+	}
 	exception_triage(exception, codes, numcodes);
 	assert(0); /* NOTREACHED */
 }
@@ -1056,6 +1208,7 @@ handle_user_abort(arm_saved_state_t *state, uint32_t esr, vm_offset_t fault_addr
 	}
 
 	codes[1] = fault_addr;
+	op2_log_user_trap("USER_FATAL_ABORT", state, fault_addr, esr, codes[0]);
 	exception_triage(exc, codes, numcodes);
 	assert(0); /* NOTREACHED */
 }
@@ -1410,7 +1563,7 @@ sleh_irq(arm_saved_state_t *state)
 
 			static uint64_t op2_timer_ticks = 0;
 			op2_timer_ticks++;
-			if (op2_timer_ticks <= 10 || (op2_timer_ticks % 100) == 0) {
+			if (op2_timer_ticks <= 10 || (op2_timer_ticks % 10000) == 0) {
 				kprintf("timer tick: %llu\n", (unsigned long long)op2_timer_ticks);
 			}
 
@@ -1631,6 +1784,57 @@ thread_syscall_return(kern_return_t error)
 	thread_exception_return();
 }
 
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
+/*
+ * OP2 first-spawn ring: with syscall tracing off (its spew wraps ramoops),
+ * spawn visibility is lost. Remember each unique spawn/exec target path
+ * (first occurrence only, bounded) and dump from the deadline panic.
+ * Single CPU, syscall-entry context: no locking, no printf here.
+ */
+#define OP2_SPAWN_RING_N 128
+static char op2_spawn_ring[OP2_SPAWN_RING_N][64];
+static unsigned op2_spawn_count = 0;
+
+static void
+op2_spawn_ring_record(const char *path)
+{
+	for (unsigned i = 0; i < op2_spawn_count && i < OP2_SPAWN_RING_N; i++) {
+		const char *a = op2_spawn_ring[i];
+		const char *b = path;
+		while (*a && *a == *b) {
+			a++;
+			b++;
+		}
+		if (*a == *b) {
+			return;
+		}
+	}
+	/* SMP: unique slot per writer. */
+	unsigned slot = __atomic_fetch_add(&op2_spawn_count, 1, __ATOMIC_RELAXED);
+	if (slot < OP2_SPAWN_RING_N) {
+		char *d = op2_spawn_ring[slot];
+		for (unsigned i = 0; i < sizeof(op2_spawn_ring[0]) - 1; i++) {
+			d[i] = path[i];
+			if (path[i] == '\0') {
+				break;
+			}
+		}
+		d[sizeof(op2_spawn_ring[0]) - 1] = '\0';
+	}
+}
+
+void op2_dump_spawn_ring(void);
+
+void
+op2_dump_spawn_ring(void)
+{
+	kprintf("OP2 SPAWN RING: %u unique targets\n", op2_spawn_count);
+	for (unsigned i = 0; i < op2_spawn_count && i < OP2_SPAWN_RING_N; i++) {
+		kprintf("OP2 SPAWN #%u: '%s'\n", i, op2_spawn_ring[i]);
+	}
+}
+#endif /* ARM64_BOARD_CONFIG_MSM8994 */
+
 void
 syscall_trace(
 	struct arm_saved_state * regs)
@@ -1641,47 +1845,66 @@ syscall_trace(
 		trace_syscalls = 0;
 		PE_parse_boot_argn("trace_syscalls", &trace_syscalls, sizeof(trace_syscalls));
 	}
+	{
+		int64_t sys = (int64_t)saved_state64(regs)->x[16];
+		if (__improbable(sys == 244 || sys == 59)) {
+			user_addr_t upath = (sys == 244) ?
+			    (user_addr_t)saved_state64(regs)->x[1] :
+			    (user_addr_t)saved_state64(regs)->x[0];
+			char pbuf[64] = {0};
+			vm_size_t len = 0;
+			if (copyinstr(upath, pbuf, sizeof(pbuf) - 1, &len) == 0) {
+				op2_spawn_ring_record(pbuf);
+			}
+		}
+	}
 	if (__improbable(trace_syscalls > 0)) {
 		int64_t sys = (int64_t)saved_state64(regs)->x[16];
 		extern int proc_selfpid(void);
 		extern void proc_selfname(char * buf, int size);
 		int pid = proc_selfpid();
+		char comm[32] = {0};
+		proc_selfname(comm, sizeof(comm));
 
 		if (sys == 244) { /* posix_spawn */
 			char pbuf[64] = {0};
 			vm_size_t len = 0;
 			copyinstr((user_addr_t)saved_state64(regs)->x[1], pbuf, sizeof(pbuf) - 1, &len);
-			char comm[32] = {0};
-			proc_selfname(comm, sizeof(comm));
 			kprintf("p=%d[%s] spawn: '%s'\n", pid, comm, pbuf);
 		} else if (sys == 59) { /* execve */
 			char pbuf[64] = {0};
 			vm_size_t len = 0;
 			copyinstr((user_addr_t)saved_state64(regs)->x[0], pbuf, sizeof(pbuf) - 1, &len);
-			char comm[32] = {0};
-			proc_selfname(comm, sizeof(comm));
 			kprintf("p=%d[%s] execve: '%s'\n", pid, comm, pbuf);
-		} else if (sys == 1 || sys == 521) { /* exit or abort_with_payload */
-			char comm[32] = {0};
-			proc_selfname(comm, sizeof(comm));
-			kprintf("p=%d[%s] exit/abort (sys %lld, arg0=%llu)\n", pid, comm, sys,
-			        (unsigned long long)saved_state64(regs)->x[0]);
+		} else if (sys == 1 || sys == 521 || sys == 520) { /* exit, abort_with_payload, terminate_with_payload */
+			kprintf("p=%d[%s] exit/abort (sys %lld, arg0=%llu) lr=0x%llx\n", pid, comm, sys,
+			        (unsigned long long)saved_state64(regs)->x[0],
+			        (unsigned long long)saved_state64(regs)->lr);
+		} else if (sys == 37) { /* kill(pid, sig) */
+			kprintf("p=%d[%s] kill(target=%lld, sig=%lld) lr=0x%llx\n", pid, comm,
+			        (long long)saved_state64(regs)->x[0],
+			        (long long)saved_state64(regs)->x[1],
+			        (unsigned long long)saved_state64(regs)->lr);
+		} else if (sys == 328) { /* __pthread_kill(thread, sig) */
+			kprintf("p=%d[%s] pthread_kill(sig=%lld) lr=0x%llx\n", pid, comm,
+			        (long long)saved_state64(regs)->x[1],
+			        (unsigned long long)saved_state64(regs)->lr);
 		} else if (sys == 167) { /* mount */
 			char pbuf[64] = {0};
 			vm_size_t len = 0;
 			copyinstr((user_addr_t)saved_state64(regs)->x[1], pbuf, sizeof(pbuf) - 1, &len);
-			char comm[32] = {0};
-			proc_selfname(comm, sizeof(comm));
 			kprintf("p=%d[%s] mount: on '%s'\n", pid, comm, pbuf);
 		} else if (pid == 1 && (sys == 5 || sys == 398 || sys == 33)) {
-			/* Only trace launchd's file probes */
-			char pbuf[64] = {0};
-			vm_size_t len = 0;
-			copyinstr((user_addr_t)saved_state64(regs)->x[0], pbuf, sizeof(pbuf) - 1, &len);
-			kprintf("p=1[launchd] sys %lld '%s'\n", sys, pbuf);
+			/* Limit launchd's file probes to first 50 calls to prevent ramoops buffer overflow */
+			static int pid1_file_probes = 0;
+			if (pid1_file_probes < 50) {
+				pid1_file_probes++;
+				char pbuf[64] = {0};
+				vm_size_t len = 0;
+				copyinstr((user_addr_t)saved_state64(regs)->x[0], pbuf, sizeof(pbuf) - 1, &len);
+				kprintf("p=1[launchd] sys %lld '%s'\n", sys, pbuf);
+			}
 		} else if (trace_syscalls > 1) {
-			char comm[32] = {0};
-			proc_selfname(comm, sizeof(comm));
 			kprintf("p=%d[%s] sys %lld\n", pid, comm, sys);
 		}
 	}
