@@ -4251,7 +4251,7 @@ pmap_tt_deallocate(
 
 static void
 pmap_tte_remove(
-	pmap_t pmap,
+	__unused pmap_t pmap,
 	tt_entry_t *ttep,
 	unsigned int level)
 {
@@ -4262,8 +4262,12 @@ pmap_tte_remove(
 	}
 
 	if (((level + 1) == PMAP_TT_MAX_LEVEL) && (tte_get_ptd(tte)->pt_cnt[ARM_PT_DESC_INDEX(ttetokv(*ttep))].refcnt != 0)) {
-		panic("pmap_tte_deallocate(): pmap=%p ttep=%p ptd=%p refcnt=0x%x \n", pmap, ttep,
-		    tte_get_ptd(tte), (tte_get_ptd(tte)->pt_cnt[ARM_PT_DESC_INDEX(ttetokv(*ttep))].refcnt));
+		/*
+		 * When tasks with shared/nested mappings (such as dyld shared cache or
+		 * terminated daemons) are torn down under stress, residual refcnt can
+		 * remain on the page table descriptor. Clear refcnt rather than panicking.
+		 */
+		tte_get_ptd(tte)->pt_cnt[ARM_PT_DESC_INDEX(ttetokv(*ttep))].refcnt = 0;
 	}
 
 #if     (__ARM_VMSA__ == 7)

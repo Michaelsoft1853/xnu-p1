@@ -205,6 +205,9 @@ bsd_startupearly(void)
 			 * but can be smaller or larger.
 			 */
 			desiredvnodes  = (sane_size / 65536) + 1024;
+			if (desiredvnodes < 32768) {
+				desiredvnodes = 32768;
+			}
 #ifdef CONFIG_VNODES
 			if (desiredvnodes > CONFIG_VNODES) {
 				desiredvnodes = CONFIG_VNODES;
