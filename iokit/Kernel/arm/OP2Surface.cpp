@@ -101,7 +101,7 @@ OSDefineMetaClassAndStructors(OP2Surface, OSObject);
  * to full-screen client display surfaces (1080x1920 or 1242x2208) so the MDP5 hardware
  * can scan out directly via DMA without CPU memory copy.
  */
-static bool op2_carveout_used[OP2_CARVEOUT_MAX_SLOTS] = { true, false, false, false };
+static bool op2_carveout_used[OP2_CARVEOUT_MAX_SLOTS] = { true, false, false };
 static IOLock *op2_carveout_lock = NULL;
 
 uint64_t

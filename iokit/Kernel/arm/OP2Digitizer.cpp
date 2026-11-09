@@ -503,22 +503,33 @@ OP2Digitizer::tapTimerFired(OSObject *owner, IOTimerEventSource *sender)
 	}
 
 	switch (me->fTapStep) {
-	case 0:
+	case 0: {
 		/*
 		 * Phase 0: Synchronize with SpringBoard display presentation.
-		 * Poll every 2 seconds until SpringBoard renders its first active,
-		 * non-zero Lock Screen UI surface to the panel.
+		 * SpringBoard starts in SBDashBoardScreenOff mode on boot.
+		 * If no non-zero frame is rendered yet, pulse the Home button
+		 * every 6 seconds to turn on the screen.
 		 */
-		if (op2_fb_get_last_shown() == 0 || op2_fb_get_last_nz() == 0) {
-			sender->setTimeoutMS(2000);
+		static uint32_t sPollCycles = 0;
+		sPollCycles++;
+		if (op2_fb_get_last_shown() > 0 && op2_fb_get_last_nz() >= 500) {
+			IOLog("OP2 Digitizer: === LOCK SCREEN DETECTED: SpringBoard surface %u active (nz=%u) ===\n",
+			    op2_fb_get_last_shown(), op2_fb_get_last_nz());
+			/* Lock Screen clock, date, and wallpaper are actively rendering! Proceed to interaction. */
+			me->fTapStep = 1;
+			sender->setTimeoutMS(2500);
 			break;
 		}
-		IOLog("OP2 Digitizer: === LOCK SCREEN DETECTED: SpringBoard surface %u active (nz=%u) ===\n",
-		    op2_fb_get_last_shown(), op2_fb_get_last_nz());
-		/* Let the Lock Screen clock, date, and wallpaper settle on the physical panel */
-		me->fTapStep = 1;
-		sender->setTimeoutMS(3000);
+		if ((sPollCycles % 3) == 0) {
+			IOLog("OP2 Digitizer: pulsing Home button to wake display (poll cycle %u)...\n", sPollCycles);
+			me->postHomeButtonEvent(1);
+			me->fTapStep = 18;
+			sender->setTimeoutMS(120);
+			break;
+		}
+		sender->setTimeoutMS(2000);
 		break;
+	}
 
 	case 1:
 		/* Phase 1: Lock Screen interaction - test touch delivery */
@@ -546,9 +557,9 @@ OP2Digitizer::tapTimerFired(OSObject *owner, IOTimerEventSource *sender)
 	case 4:
 		IOLog("OP2 Digitizer: [LOCK SCREEN] Home button release\n");
 		me->postHomeButtonEvent(0);
-		/* Wait 1800ms for wake animation to finish so SpringBoard is in awake state */
+		/* Wait 2200ms for wake animation to finish so SpringBoard is in awake state */
 		me->fTapStep = 5;
-		sender->setTimeoutMS(1800);
+		sender->setTimeoutMS(2200);
 		break;
 
 	case 5:
@@ -566,9 +577,9 @@ OP2Digitizer::tapTimerFired(OSObject *owner, IOTimerEventSource *sender)
 	case 6:
 		IOLog("OP2 Digitizer: [HOME SCREEN] Home button released -> dismissing Lock Screen to Home Screen\n");
 		me->postHomeButtonEvent(0);
-		/* Wait 2000ms for unlock transition to complete and Home Screen icon grid to settle */
+		/* Wait 2500ms for unlock transition to complete and Home Screen icon grid to settle */
 		me->fTapStep = 7;
-		sender->setTimeoutMS(2000);
+		sender->setTimeoutMS(2500);
 		break;
 
 	case 7:
@@ -631,14 +642,15 @@ OP2Digitizer::tapTimerFired(OSObject *owner, IOTimerEventSource *sender)
 	case 15: {
 		/*
 		 * Phase 4: Continuous Home Screen Keep-Alive & Interactive Loop.
-		 * Gentle tap on icon grid every 2.5s keeps screen permanently awake.
+		 * Alternates between touch input and Home button every 2.5s.
+		 * Defeats 6.0s idle timer and keeps screen permanently illuminated.
 		 */
 		uint32_t n = op2_autotap_count++;
 		uint32_t x = 0x3000 + ((n * 0x2400 + 0x1000) % 0xa000);
 		uint32_t y = 0x3000 + ((n * 0x3800 + 0x1500) % 0x9000);
-		if ((n % 20) == 19) {
-			/* Every 20 cycles (~50s), press Home button to ensure main icon page and prevent any lock */
-			IOLog("OP2 Digitizer: [HOME SCREEN %u] periodic Home press\n", n);
+		if ((n % 2) == 1) {
+			/* Every 2 cycles (~5s), press Home button to defeat idle timer */
+			IOLog("OP2 Digitizer: [HOME SCREEN %u] keep-alive Home press\n", n);
 			me->postHomeButtonEvent(1);
 			me->fTapStep = 17;
 			sender->setTimeoutMS(120);
@@ -662,6 +674,12 @@ OP2Digitizer::tapTimerFired(OSObject *owner, IOTimerEventSource *sender)
 		me->postHomeButtonEvent(0);
 		me->fTapStep = 15;
 		sender->setTimeoutMS(2500);
+		break;
+
+	case 18:
+		me->postHomeButtonEvent(0);
+		me->fTapStep = 0;
+		sender->setTimeoutMS(1500);
 		break;
 
 	default:

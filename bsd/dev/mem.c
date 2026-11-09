@@ -272,6 +272,9 @@ mmrw(dev_t dev, struct uio *uio, enum uio_rw rw)
 					}
 					buf[c] = '\0';
 					if (strnstr(buf, "AppleM2ScalerCSCDriver", c) == NULL &&
+					    strnstr(buf, "CLIoHidInterface", c) == NULL &&
+					    strnstr(buf, "categoryForBundleID", c) == NULL &&
+					    strnstr(buf, "no client connection for port", c) == NULL &&
 					    !(c == 1 && (buf[0] == '\n' || buf[0] == '\r'))) {
 						printf("|%s| %.*s%s", name, (int)c, buf,
 						    (c > 0 && buf[c - 1] == '\n') ? "" : "\n");

@@ -496,16 +496,18 @@ AppleCLCD::start(IOService *provider)
 	 * Phase 1 Metal Bring-Up: Publish IOAcceleratorES service.
 	 * CoreAnimation and Metal.framework discover graphics accelerators via
 	 * IOServiceMatching("IOAcceleratorES") and IOServiceMatching("AGXAccelerator").
-	 * When boot-arg metal=N is present (e.g. metal=1, metal=2, metal=3), we set
+	 * When boot-arg metal=N is present (e.g. metal=1, metal=2), we set
 	 * MetalPluginName and MetalPluginClassName so userland loads OP2Metal.bundle.
+	 * By default (metal=0), no accelerator is published so CoreAnimation uses
+	 * its native, fully-functional CPU software rasterizer.
 	 */
-	AGXAccelerator *accelerator = OSTypeAlloc(AGXAccelerator);
-	if (accelerator != NULL) {
-		if (accelerator->init() && accelerator->attach(this)) {
-			uint32_t metal = 2;
-			accelerator->setName("sgx");
-			PE_parse_boot_argn("metal", &metal, sizeof(metal));
-			if (metal != 0) {
+	uint32_t metal = 0;
+	PE_parse_boot_argn("metal", &metal, sizeof(metal));
+	if (metal > 0) {
+		AGXAccelerator *accelerator = OSTypeAlloc(AGXAccelerator);
+		if (accelerator != NULL) {
+			if (accelerator->init() && accelerator->attach(this)) {
+				accelerator->setName("sgx");
 				accelerator->setProperty("MetalPluginName", "OP2Metal");
 				accelerator->setProperty("MetalPluginClassName", "OP2MetalDevice");
 				accelerator->setProperty("IOGLBundleName", "OP2Metal");
@@ -513,13 +515,13 @@ AppleCLCD::start(IOService *provider)
 				accelerator->setProperty("IOGLESBundleName", "AGXGLDriver");
 				accelerator->setProperty("IOGLESMetalBundleName", "AGXGLDriver");
 				IOLog("OP2 FB: metal=%u: published IOAcceleratorES/AGXAccelerator naming OP2Metal\n", metal);
-			} else {
-				IOLog("OP2 FB: published IOAcceleratorES/AGXAccelerator (metal plug-in disabled)\n");
+				accelerator->setProperty(kIOUserClientClassKey, "OP2GPUUserClient");
+				accelerator->registerService();
 			}
-			accelerator->setProperty(kIOUserClientClassKey, "OP2GPUUserClient");
-			accelerator->registerService();
+			accelerator->release();
 		}
-		accelerator->release();
+	} else {
+		IOLog("OP2 FB: metal disabled; using native CPU software rasterization\n");
 	}
 
 	return true;
@@ -1150,8 +1152,13 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
 		outCount = 1;
 		break;
 	case kOP2FBGetDisplaySize:
-		out[0] = fFB->fWidth;
-		out[1] = fFB->fHeight;
+		/*
+		 * On iPhone 6 Plus (n56ap), UIKit renders at 3x Retina (1242x2208).
+		 * Reporting 1242x2208 matches native n56ap display geometry and
+		 * prevents CoreAnimation from dropping [1242x2208] render surfaces.
+		 */
+		out[0] = 1242;
+		out[1] = 2208;
 		outCount = 2;
 		break;
 	case kOP2FBRequestPowerChange:
@@ -1197,12 +1204,12 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
 		outCount = 1;
 		if (args->structureOutput != NULL && args->structureOutputSize >= 64) {
 			uint32_t *fi = (uint32_t *)args->structureOutput;
-			fi[0] = fFB->fWidth;          /* 1080 */
-			fi[1] = fFB->fHeight;         /* 1920 */
+			fi[0] = 1242;                 /* Retina logical display width */
+			fi[1] = 2208;                 /* Retina logical display height */
 			fi[2] = 60;                   /* refresh rate 60 Hz */
 			fi[3] = 0;                    /* flags */
 			fi[4] = OP2_FB_FORMAT_BGRA;   /* format */
-			fi[5] = fFB->fRowBytes;       /* 4352 */
+			fi[5] = 1242 * 4;             /* 4968 */
 		}
 		break;
 	case kOP2FBChangeFrameInfo:

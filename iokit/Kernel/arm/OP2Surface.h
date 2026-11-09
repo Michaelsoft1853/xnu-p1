@@ -67,8 +67,8 @@ OP2Surface *op2_surface_create_physical(uint64_t phys, uint32_t width,
 #define OP2_CARVEOUT_BASE             0x03400000ULL
 #define OP2_CARVEOUT_SIZE             (34ULL << 20) /* 34 MiB reserved by LK (up to 0x05600000) */
 #define OP2_CARVEOUT_SLOT0_SIZE       (8ULL << 20)  /* 8 MiB for AppleCLCD::fSurface (1080x1920) */
-#define OP2_CARVEOUT_SLOT_SIZE        (8ULL << 20)  /* 8 MiB per display buffer slot (1080x1920 bpr 4352 = 8,355,840) */
-#define OP2_CARVEOUT_MAX_SLOTS        4             /* Slot 0 (fSurface), Slot 1, Slot 2, Slot 3 */
+#define OP2_CARVEOUT_SLOT_SIZE        (12ULL << 20) /* 12 MiB per display buffer slot (1242x2208 = 11.3 MiB) */
+#define OP2_CARVEOUT_MAX_SLOTS        3             /* Slot 0 (fSurface), Slot 1, Slot 2 */
 
 uint64_t op2_carveout_alloc_slot(uint32_t size);
 void op2_carveout_free_slot(uint64_t phys);
