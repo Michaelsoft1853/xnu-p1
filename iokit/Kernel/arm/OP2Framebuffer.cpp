@@ -862,15 +862,17 @@ AppleCLCD::present(const uint8_t *rec)
 	static bool sHasNonZeroUI = false;
 	if (shown_nz > 0) {
 		sHasNonZeroUI = true;
-	} else if (sHasNonZeroUI) {
+	} else {
 		/*
 		 * Incoming frame has no visible RGB pixels.
-		 * Preserve physical panel memory so the user continues
-		 * to see the active UI instead of a zero-filled black screen.
+		 * If we haven't seen a non-zero frame yet, preserve the Apple boot splash!
+		 * If we've already seen a non-zero frame, preserve the active UI!
+		 * Under NO circumstances should an all-zero buffer be scanned out or copied to the panel.
 		 */
 		static uint32_t sPreserveLog = 0;
 		if (++sPreserveLog <= 5 || (sPreserveLog % 60) == 0) {
-			IOLog("OP2 FB: preserving last non-zero frame (surface %u has no RGB pixels)\n", shown_id);
+			IOLog("OP2 FB: preserving display (surface %u has no RGB pixels, non_zero=%d)\n",
+			    shown_id, (int)sHasNonZeroUI);
 		}
 		if (s != fSurface) {
 			s->release();
