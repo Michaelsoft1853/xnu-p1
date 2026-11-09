@@ -642,30 +642,27 @@ OP2Digitizer::tapTimerFired(OSObject *owner, IOTimerEventSource *sender)
 	case 15: {
 		/*
 		 * Phase 4: Continuous Home Screen Keep-Alive & Interactive Loop.
-		 * Alternates between touch input and Home button every 2.5s.
-		 * Defeats 6.0s idle timer and keeps screen permanently illuminated.
+		 * Defeats idle timer and keeps screen permanently illuminated.
+		 * Taps safely in the top margin (x=0x0100, y=0x0100) to reset the
+		 * user activity timer without opening apps, with periodic keep-alive
+		 * Home pulse every 20 cycles (~50s).
 		 */
 		uint32_t n = op2_autotap_count++;
-		uint32_t x = 0x3000 + ((n * 0x2400 + 0x1000) % 0xa000);
-		uint32_t y = 0x3000 + ((n * 0x3800 + 0x1500) % 0x9000);
-		if ((n % 2) == 1) {
-			/* Every 2 cycles (~5s), press Home button to defeat idle timer */
-			IOLog("OP2 Digitizer: [HOME SCREEN %u] keep-alive Home press\n", n);
+		if ((n % 20) == 19) {
+			/* Every 20 cycles (~50s), press Home button to ensure awake and defeat sleep */
+			IOLog("OP2 Digitizer: [HOME SCREEN %u] periodic Home press\n", n);
 			me->postHomeButtonEvent(1);
 			me->fTapStep = 17;
 			sender->setTimeoutMS(120);
 			break;
 		}
-		me->postDigitizerEvent(1, x, y, 0, true);
+		me->postDigitizerEvent(1, 0x0100, 0x0100, 0, true);
 		me->fTapStep = 16;
-		sender->setTimeoutMS(100);
+		sender->setTimeoutMS(50);
 		break;
 	}
 	case 16: {
-		uint32_t n = op2_autotap_count;
-		uint32_t x = 0x3000 + (((n - 1) * 0x2400 + 0x1000) % 0xa000);
-		uint32_t y = 0x3000 + (((n - 1) * 0x3800 + 0x1500) % 0x9000);
-		me->postDigitizerEvent(0, x, y, 0, true);
+		me->postDigitizerEvent(0, 0x0100, 0x0100, 0, true);
 		me->fTapStep = 15;
 		sender->setTimeoutMS(2500); /* 2.5s interval keeps screen permanently awake! */
 		break;
