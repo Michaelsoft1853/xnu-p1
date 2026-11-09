@@ -973,6 +973,24 @@ AppleCLCD::present(const uint8_t *rec)
 }
 
 /*
+ * Display getters for input/digitizer synchronization:
+ */
+extern "C" uint32_t op2_fb_get_last_shown(void);
+extern "C" uint32_t op2_fb_get_last_nz(void);
+
+uint32_t
+op2_fb_get_last_shown(void)
+{
+	return op2_fb_last_shown;
+}
+
+uint32_t
+op2_fb_get_last_nz(void)
+{
+	return op2_fb_last_nz;
+}
+
+/*
  * Deadline-dump display verdict: proves lit-UI vs black pixels from the log
  * alone (no eyes needed). Samples panel memory directly; lock-free MMIO read.
  */

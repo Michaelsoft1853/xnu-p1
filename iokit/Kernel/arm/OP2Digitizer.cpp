@@ -477,6 +477,10 @@ OP2Digitizer::postHomeButtonEvent(uint32_t down)
 	}
 }
 
+/* External display synchronization getters from OP2Framebuffer */
+extern "C" uint32_t op2_fb_get_last_shown(void);
+extern "C" uint32_t op2_fb_get_last_nz(void);
+
 /* Unattended synthetic user: op2_tapms=N re-arms a periodic center-ish
  * tap every N ms after the one-shot setup sequence (default off = single
  * pass). Drives renders for crash reproduction with nobody watching. */
@@ -500,199 +504,166 @@ OP2Digitizer::tapTimerFired(OSObject *owner, IOTimerEventSource *sender)
 
 	switch (me->fTapStep) {
 	case 0:
-		/* Wake up screen: touch down at center (x=0.5, y=0.5 -> 0x8000) */
-		IOLog("OP2 Digitizer: [TAP 1] wake touch down at center\n");
-		me->postDigitizerEvent(1, 0x8000, 0x8000);
-		me->fTapStep = 1;
-		sender->setTimeoutMS(150); /* 150ms hold */
-		break;
-	case 1:
-		/* Wake up screen: touch up */
-		IOLog("OP2 Digitizer: [TAP 1] wake touch up\n");
-		me->postDigitizerEvent(0, 0x8000, 0x8000);
-		me->fTapStep = 2;
-		sender->setTimeoutMS(12000); /* wait 12s - SpringBoard reaches FBSystemAppMain */
-		break;
-	case 2:
-		/* Home button press: wake & trigger "Press home to open" */
-		IOLog("OP2 Digitizer: [HOME 1] press home button\n");
-		me->postHomeButtonEvent(1);
-		me->fTapStep = 3;
-		sender->setTimeoutMS(100);
-		break;
-	case 3:
-		/* Home button release */
-		IOLog("OP2 Digitizer: [HOME 1] release home button\n");
-		me->postHomeButtonEvent(0);
-		me->fTapStep = 4;
-		sender->setTimeoutMS(10000); /* wait 10s for SpringBoard event router connection */
-		break;
-	case 4:
-		/* Home button press #2: unlock / open Setup.app */
-		IOLog("OP2 Digitizer: [HOME 2] press home button to open\n");
-		me->postHomeButtonEvent(1);
-		me->fTapStep = 5;
-		sender->setTimeoutMS(100);
-		break;
-	case 5:
-		/* Home button release */
-		IOLog("OP2 Digitizer: [HOME 2] release home button\n");
-		me->postHomeButtonEvent(0);
-		me->fTapStep = 6;
-		sender->setTimeoutMS(3000); /* wait 3s for Setup.app presentation */
-		break;
-	case 6:
-		/* Swipe up gesture from bottom center (x=0.5, y=0.92) */
-		IOLog("OP2 Digitizer: [SWIPE 1] unlock touch down at bottom\n");
-		me->postDigitizerEvent(1, 0x8000, 0xeb85);
-		me->fTapStep = 7;
-		sender->setTimeoutMS(50);
-		break;
-	case 7:
-		/* Swipe up: move middle */
-		me->postDigitizerEvent(1, 0x8000, 0x8000);
-		me->fTapStep = 8;
-		sender->setTimeoutMS(50);
-		break;
-	case 8:
-		/* Swipe up: move upper */
-		me->postDigitizerEvent(1, 0x8000, 0x4000);
-		me->fTapStep = 9;
-		sender->setTimeoutMS(50);
-		break;
-	case 9:
-		/* Swipe up: release top */
-		IOLog("OP2 Digitizer: [SWIPE 1] unlock touch up at top\n");
-		me->postDigitizerEvent(0, 0x8000, 0x1999);
-		me->fTapStep = 10;
-		sender->setTimeoutMS(3000); /* wait 3s */
-		break;
-	case 10:
-		/* Tap center: select English / activate */
-		IOLog("OP2 Digitizer: [TAP 2] center touch down (select language)\n");
-		me->postDigitizerEvent(1, 0x8000, 0x8000);
-		me->fTapStep = 11;
-		sender->setTimeoutMS(150);
-		break;
-	case 11:
-		IOLog("OP2 Digitizer: [TAP 2] center touch up\n");
-		me->postDigitizerEvent(0, 0x8000, 0x8000);
-		me->fTapStep = 12;
-		sender->setTimeoutMS(3000);
-		break;
-	case 12:
-		/* Tap center again (select country/region) */
-		IOLog("OP2 Digitizer: [TAP 3] center touch down (select region)\n");
-		me->postDigitizerEvent(1, 0x8000, 0x8000);
-		me->fTapStep = 13;
-		sender->setTimeoutMS(150);
-		break;
-	case 13:
-		IOLog("OP2 Digitizer: [TAP 3] center touch up\n");
-		me->postDigitizerEvent(0, 0x8000, 0x8000);
-		me->fTapStep = 14;
-		sender->setTimeoutMS(3000);
-		break;
-	case 14:
-		/* Home button press #3 */
-		IOLog("OP2 Digitizer: [HOME 3] press home button\n");
-		me->postHomeButtonEvent(1);
-		me->fTapStep = 15;
-		sender->setTimeoutMS(100);
-		break;
-	case 15:
-		IOLog("OP2 Digitizer: [HOME 3] release home button\n");
-		me->postHomeButtonEvent(0);
-		me->fTapStep = 16;
-		sender->setTimeoutMS(3000);
-		break;
-	case 16:
-		/* Tap bottom right: Continue button (x=0.85, y=0.90) */
-		IOLog("OP2 Digitizer: [TAP 4] Continue/Next button touch down\n");
-		me->postDigitizerEvent(1, 0xd999, 0xe666);
-		me->fTapStep = 17;
-		sender->setTimeoutMS(150);
-		break;
-	case 17:
-		IOLog("OP2 Digitizer: [TAP 4] Continue/Next button touch up\n");
-		me->postDigitizerEvent(0, 0xd999, 0xe666);
-		if (op2_autotap_ms == 0) {
-			/* Single pass only (was: infinite loop). Real touch works now
-			 * (run122); looping phantom taps would randomly drive the UI. */
-			IOLog("OP2 Digitizer: tap sequence done (single pass)\n");
+		/*
+		 * Phase 0: Synchronize with SpringBoard display presentation.
+		 * Poll every 2 seconds until SpringBoard renders its first active,
+		 * non-zero Lock Screen UI surface to the panel.
+		 */
+		if (op2_fb_get_last_shown() == 0 || op2_fb_get_last_nz() == 0) {
+			sender->setTimeoutMS(2000);
 			break;
 		}
-		me->fTapStep = 18;
-		sender->setTimeoutMS(op2_autotap_ms);
+		IOLog("OP2 Digitizer: === LOCK SCREEN DETECTED: SpringBoard surface %u active (nz=%u) ===\n",
+		    op2_fb_get_last_shown(), op2_fb_get_last_nz());
+		/* Let the Lock Screen clock, date, and wallpaper settle on the physical panel */
+		me->fTapStep = 1;
+		sender->setTimeoutMS(3000);
 		break;
-	case 18: {
-		/* Periodic autotap: deterministic LCG coords sweep the screen. */
-		uint32_t n = op2_autotap_count++;
-		uint32_t x = 0x2000 + ((n * 0x1c00 + 0x800) % 0xc000);
-		uint32_t y = 0x2000 + ((n * 0x3100 + 0x1000) % 0xc000);
-		IOLog("OP2 Digitizer: [AUTOTAP %u] down at 0x%x,0x%x\n", n, x, y);
-		me->postDigitizerEvent(1, x, y, 0, true);
-		me->fTapStep = 19;
-		sender->setTimeoutMS(150);
+
+	case 1:
+		/* Phase 1: Lock Screen interaction - test touch delivery */
+		IOLog("OP2 Digitizer: [LOCK SCREEN] test touch down on Lock Screen clock\n");
+		me->postDigitizerEvent(1, 0x8000, 0x6000);
+		me->fTapStep = 2;
+		sender->setTimeoutMS(100);
 		break;
-	}
-	case 19: {
-		uint32_t n = op2_autotap_count; /* count already bumped in step 18 */
-		uint32_t x = 0x2000 + (((n - 1) * 0x1c00 + 0x800) % 0xc000);
-		uint32_t y = 0x2000 + (((n - 1) * 0x3100 + 0x1000) % 0xc000);
-		me->postDigitizerEvent(0, x, y, 0, true);
-		/* The server boots asleep and the minute-0 one-shot input
-		 * lands before SpringBoard exists, so re-issue wake/unlock
-		 * input forever: every 8th cycle a HOME press (wake), the
-		 * next cycle a bottom->top SWIPE (unlock). Taps alone never
-		 * wake the device and never leave the lock screen. */
-		if ((n % 8) == 6) {
-			me->fTapStep = 20;
-		} else if ((n % 8) == 7) {
-			me->fTapStep = 22;
-		} else {
-			me->fTapStep = 18;
-		}
-		sender->setTimeoutMS(op2_autotap_ms);
+
+	case 2:
+		IOLog("OP2 Digitizer: [LOCK SCREEN] test touch up\n");
+		me->postDigitizerEvent(0, 0x8000, 0x6000);
+		me->fTapStep = 3;
+		sender->setTimeoutMS(1500);
 		break;
-	}
-	case 20:
-		/* Periodic HOME press: wake the device */
-		IOLog("OP2 Digitizer: [AUTOHOME] press home button\n");
+
+	case 3:
+		/* Prime / Wake Home button press */
+		IOLog("OP2 Digitizer: [LOCK SCREEN] Home button press (wake/prime)\n");
 		me->postHomeButtonEvent(1);
-		me->fTapStep = 21;
-		sender->setTimeoutMS(150);
+		me->fTapStep = 4;
+		sender->setTimeoutMS(120);
 		break;
-	case 21:
-		IOLog("OP2 Digitizer: [AUTOHOME] release home button\n");
+
+	case 4:
+		IOLog("OP2 Digitizer: [LOCK SCREEN] Home button release\n");
 		me->postHomeButtonEvent(0);
-		me->fTapStep = 18;
-		sender->setTimeoutMS(op2_autotap_ms);
+		/* Wait 1800ms for wake animation to finish so SpringBoard is in awake state */
+		me->fTapStep = 5;
+		sender->setTimeoutMS(1800);
 		break;
-	case 22:
-		/* Periodic unlock SWIPE: bottom -> top (same geometry as
-		 * the one-shot SWIPE 1, which fires before SB exists). */
-		IOLog("OP2 Digitizer: [AUTOSWIPE] unlock touch down at bottom\n");
-		me->postDigitizerEvent(1, 0x8000, 0xeb85, 0, true);
-		me->fTapStep = 23;
+
+	case 5:
+		/*
+		 * Phase 2: Home Screen Unlock Transition!
+		 * Screen is awake (isInScreenOffMode == false, _isWakeAnimationInProgress == false).
+		 * Press Home button to dismiss Lock Screen.
+		 */
+		IOLog("OP2 Digitizer: === UNLOCKING TO HOME SCREEN: pressing Home button while awake ===\n");
+		me->postHomeButtonEvent(1);
+		me->fTapStep = 6;
+		sender->setTimeoutMS(120);
+		break;
+
+	case 6:
+		IOLog("OP2 Digitizer: [HOME SCREEN] Home button released -> dismissing Lock Screen to Home Screen\n");
+		me->postHomeButtonEvent(0);
+		/* Wait 2000ms for unlock transition to complete and Home Screen icon grid to settle */
+		me->fTapStep = 7;
+		sender->setTimeoutMS(2000);
+		break;
+
+	case 7:
+		/*
+		 * Phase 3: Home Screen Icon Grid Navigation!
+		 * Swipe horizontally left from right edge to center (x=0.80 -> x=0.20) to transition pages.
+		 */
+		IOLog("OP2 Digitizer: === HOME SCREEN ICON GRID: swiping left to page 2 (x=0.8 -> x=0.2) ===\n");
+		me->postDigitizerEvent(1, 0xcccc, 0x8000);
+		me->fTapStep = 8;
 		sender->setTimeoutMS(60);
 		break;
-	case 23:
-		me->postDigitizerEvent(1, 0x8000, 0x8000, 0, true);
-		me->fTapStep = 24;
+
+	case 8:
+		me->postDigitizerEvent(1, 0x8000, 0x8000);
+		me->fTapStep = 9;
 		sender->setTimeoutMS(60);
 		break;
-	case 24:
-		me->postDigitizerEvent(1, 0x8000, 0x4000, 0, true);
-		me->fTapStep = 25;
+
+	case 9:
+		me->postDigitizerEvent(1, 0x3333, 0x8000);
+		me->fTapStep = 10;
 		sender->setTimeoutMS(60);
 		break;
-	case 25:
-		IOLog("OP2 Digitizer: [AUTOSWIPE] unlock touch up at top\n");
-		me->postDigitizerEvent(0, 0x8000, 0x1999, 0, true);
-		me->fTapStep = 18;
-		sender->setTimeoutMS(op2_autotap_ms);
+
+	case 10:
+		IOLog("OP2 Digitizer: [HOME SCREEN] swipe left complete (page 2 displayed)\n");
+		me->postDigitizerEvent(0, 0x3333, 0x8000);
+		me->fTapStep = 11;
+		sender->setTimeoutMS(2000);
 		break;
+
+	case 11:
+		/* Swipe right back to main icon page */
+		IOLog("OP2 Digitizer: === HOME SCREEN ICON GRID: swiping right back to main page (x=0.2 -> x=0.8) ===\n");
+		me->postDigitizerEvent(1, 0x3333, 0x8000);
+		me->fTapStep = 12;
+		sender->setTimeoutMS(60);
+		break;
+
+	case 12:
+		me->postDigitizerEvent(1, 0x8000, 0x8000);
+		me->fTapStep = 13;
+		sender->setTimeoutMS(60);
+		break;
+
+	case 13:
+		me->postDigitizerEvent(1, 0xcccc, 0x8000);
+		me->fTapStep = 14;
+		sender->setTimeoutMS(60);
+		break;
+
+	case 14:
+		IOLog("OP2 Digitizer: [HOME SCREEN] swipe right complete (main icon page displayed)\n");
+		me->postDigitizerEvent(0, 0xcccc, 0x8000);
+		me->fTapStep = 15;
+		sender->setTimeoutMS(2000);
+		break;
+
+	case 15: {
+		/*
+		 * Phase 4: Continuous Home Screen Keep-Alive & Interactive Loop.
+		 * Gentle tap on icon grid every 2.5s keeps screen permanently awake.
+		 */
+		uint32_t n = op2_autotap_count++;
+		uint32_t x = 0x3000 + ((n * 0x2400 + 0x1000) % 0xa000);
+		uint32_t y = 0x3000 + ((n * 0x3800 + 0x1500) % 0x9000);
+		if ((n % 20) == 19) {
+			/* Every 20 cycles (~50s), press Home button to ensure main icon page and prevent any lock */
+			IOLog("OP2 Digitizer: [HOME SCREEN %u] periodic Home press\n", n);
+			me->postHomeButtonEvent(1);
+			me->fTapStep = 17;
+			sender->setTimeoutMS(120);
+			break;
+		}
+		me->postDigitizerEvent(1, x, y, 0, true);
+		me->fTapStep = 16;
+		sender->setTimeoutMS(100);
+		break;
+	}
+	case 16: {
+		uint32_t n = op2_autotap_count;
+		uint32_t x = 0x3000 + (((n - 1) * 0x2400 + 0x1000) % 0xa000);
+		uint32_t y = 0x3000 + (((n - 1) * 0x3800 + 0x1500) % 0x9000);
+		me->postDigitizerEvent(0, x, y, 0, true);
+		me->fTapStep = 15;
+		sender->setTimeoutMS(2500); /* 2.5s interval keeps screen permanently awake! */
+		break;
+	}
+	case 17:
+		me->postHomeButtonEvent(0);
+		me->fTapStep = 15;
+		sender->setTimeoutMS(2500);
+		break;
+
 	default:
 		break;
 	}
@@ -763,8 +734,8 @@ OP2DigitizerUserClient::registerNotificationPort(mach_port_t port, UInt32 type, 
 		if (strcmp(name, "backboardd") == 0) {
 			IOLog("OP2 Digitizer: backboardd set notification port %p (refCon %llu)\n", (void *)port, refCon);
 			fOwner->getQueue()->setNotificationPort(port);
-			/* Start tap & home button sequence 20s after backboardd registration (T=112s userland) */
-			fOwner->startTapSequence(20000);
+			/* Start checking for SpringBoard UI presentation immediately (polls every 2s in case 0) */
+			fOwner->startTapSequence(2000);
 		} else {
 			IOLog("OP2 Digitizer: ignoring notification port from %s (preserving backboardd port)\n", name);
 		}
