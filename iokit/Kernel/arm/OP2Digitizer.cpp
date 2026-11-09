@@ -357,6 +357,18 @@ OP2Digitizer::free(void)
 }
 
 extern "C" void op2_digitizer_post(uint32_t touchDown, uint32_t x_fp16, uint32_t y_fp16, uint32_t z_raw);
+extern "C" void op2_home_button_post(uint32_t down);
+
+extern "C" void
+op2_home_button_post(uint32_t down)
+{
+	if (gOP2Digitizer != NULL) {
+		gOP2Digitizer->postHomeButtonEvent(down);
+	} else if (gOP2Buttons != NULL) {
+		gOP2Buttons->key(0x0040, down);
+	}
+}
+
 extern "C" void
 op2_digitizer_post(uint32_t touchDown, uint32_t x_fp16, uint32_t y_fp16, uint32_t z_raw)
 {
@@ -643,14 +655,28 @@ OP2Digitizer::tapTimerFired(OSObject *owner, IOTimerEventSource *sender)
 		/*
 		 * Phase 4: Continuous Home Screen Keep-Alive & Interactive Loop.
 		 * Defeats idle timer and keeps screen permanently illuminated.
-		 * Taps safely in the top margin (x=0x0100, y=0x0100) to reset the
-		 * user activity timer without opening apps, with periodic keep-alive
-		 * Home pulse every 20 cycles (~50s).
+		 * Detects if SpringBoard crashed & respawned: when SpringBoard respawns,
+		 * surface ID advances by >= 2 (e.g. from 2 to 10). When detected,
+		 * reset state machine to Phase 0 to automatically wake and unlock back to Home Screen!
 		 */
+		static uint32_t s_last_tracked_shown = 0;
+		uint32_t cur_shown = op2_fb_get_last_shown();
+		if (s_last_tracked_shown != 0 && cur_shown >= s_last_tracked_shown + 2) {
+			IOLog("OP2 Digitizer: SpringBoard restart detected (surface jumped %u -> %u)! Resetting unlock sequence...\n",
+			    s_last_tracked_shown, cur_shown);
+			s_last_tracked_shown = cur_shown;
+			me->fTapStep = 0;
+			sender->setTimeoutMS(1500);
+			break;
+		}
+		if (s_last_tracked_shown == 0) {
+			s_last_tracked_shown = cur_shown;
+		}
+
 		uint32_t n = op2_autotap_count++;
 		if ((n % 20) == 19) {
-			/* Every 20 cycles (~50s), press Home button to ensure awake and defeat sleep */
-			IOLog("OP2 Digitizer: [HOME SCREEN %u] periodic Home press\n", n);
+			/* Every 20 cycles (~50s), perform awake Home sequence: wake + unlock pulse */
+			IOLog("OP2 Digitizer: [HOME SCREEN %u] periodic Home keep-alive\n", n);
 			me->postHomeButtonEvent(1);
 			me->fTapStep = 17;
 			sender->setTimeoutMS(120);
@@ -669,14 +695,28 @@ OP2Digitizer::tapTimerFired(OSObject *owner, IOTimerEventSource *sender)
 	}
 	case 17:
 		me->postHomeButtonEvent(0);
-		me->fTapStep = 15;
-		sender->setTimeoutMS(2500);
+		/* Wait 1200ms for wake, then pulse Home a second time to unlock if screen was locked */
+		me->fTapStep = 19;
+		sender->setTimeoutMS(1200);
 		break;
 
 	case 18:
 		me->postHomeButtonEvent(0);
 		me->fTapStep = 0;
 		sender->setTimeoutMS(1500);
+		break;
+
+	case 19:
+		IOLog("OP2 Digitizer: [HOME SCREEN] periodic Home unlock pulse\n");
+		me->postHomeButtonEvent(1);
+		me->fTapStep = 20;
+		sender->setTimeoutMS(120);
+		break;
+
+	case 20:
+		me->postHomeButtonEvent(0);
+		me->fTapStep = 15;
+		sender->setTimeoutMS(2500);
 		break;
 
 	default:

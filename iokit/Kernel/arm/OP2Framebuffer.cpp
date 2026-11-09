@@ -69,8 +69,8 @@ op2_fb_kick_panel(volatile uint32_t *ctl)
 		return;
 	}
 	uint64_t now = mach_absolute_time();
-	/* Minimum 33.3 ms spacing (30 Hz cap) to ensure previous DSI transfer finished */
-	if (op2_fb_last_kick != 0 && (now - op2_fb_last_kick) < 640000ULL) {
+	/* Spacing to ensure previous DSI transfer finished (60 Hz = ~16.6 ms = 320,000 ticks) */
+	if (op2_fb_last_kick != 0 && (now - op2_fb_last_kick) < 280000ULL) {
 		return;
 	}
 	op2_fb_last_kick = now;
@@ -927,20 +927,35 @@ AppleCLCD::present(const uint8_t *rec)
 		if (src != 0 && bpe == 4 && fPixels != 0) {
 			if (s->width == 1242 && s->height == 2208) {
 				static uint32_t sx_map[1080];
-				static bool sx_map_ready = false;
-				if (!sx_map_ready) {
+				static uint32_t sy_map[1920];
+				static bool maps_ready = false;
+				if (!maps_ready) {
 					for (int32_t x = 0; x < 1080; x++) {
 						sx_map[x] = (uint32_t)(((uint64_t)x * 1242) / 1080);
 					}
-					sx_map_ready = true;
+					for (int32_t y = 0; y < 1920; y++) {
+						sy_map[y] = (uint32_t)(((uint64_t)y * 2208) / 1920);
+					}
+					maps_ready = true;
 				}
 				uint64_t last_retina = (uint64_t)s->offset + (uint64_t)2207 * s->bytesPerRow + (uint64_t)1242 * 4;
 				if (s->memory != NULL && last_retina <= s->memory->getLength()) {
 					for (int32_t y = 0; y < (int32_t)fHeight; y++) {
-						uint32_t sy_coord = ((uint64_t)y * 2208) / 1920;
+						uint32_t sy_coord = sy_map[y];
 						const uint32_t *src_row = (const uint32_t *)(src + s->offset + (uint64_t)sy_coord * s->bytesPerRow);
 						uint32_t *dst_row = (uint32_t *)(fPixels + (uint64_t)y * fRowBytes);
-						for (int32_t x = 0; x < (int32_t)fWidth; x++) {
+						int32_t x = 0;
+						for (; x <= (int32_t)fWidth - 8; x += 8) {
+							dst_row[x + 0] = src_row[sx_map[x + 0]];
+							dst_row[x + 1] = src_row[sx_map[x + 1]];
+							dst_row[x + 2] = src_row[sx_map[x + 2]];
+							dst_row[x + 3] = src_row[sx_map[x + 3]];
+							dst_row[x + 4] = src_row[sx_map[x + 4]];
+							dst_row[x + 5] = src_row[sx_map[x + 5]];
+							dst_row[x + 6] = src_row[sx_map[x + 6]];
+							dst_row[x + 7] = src_row[sx_map[x + 7]];
+						}
+						for (; x < (int32_t)fWidth; x++) {
 							dst_row[x] = src_row[sx_map[x]];
 						}
 					}

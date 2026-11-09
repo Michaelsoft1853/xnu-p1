@@ -24,6 +24,7 @@
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern "C" void op2_digitizer_post(uint32_t touchDown, uint32_t x_fp16, uint32_t y_fp16, uint32_t z_raw);
+extern "C" void op2_home_button_post(uint32_t down);
 
 /* Physical bases (MSM8994) */
 #define OP2_QUP2_PHYS           0xf9924000ULL
@@ -438,6 +439,11 @@ OP2I2C::pollLoop(void)
 			uint32_t xfp = (px * 65536U) / 1080U;
 			uint32_t yfp = (py * 65536U) / 1920U;
 			op2_digitizer_post(down ? 1 : 0, xfp, yfp, f[5]);
+			if (down != prevDown && py > 1820 && px > 360 && px < 720) {
+				op2_home_button_post(down ? 1 : 0);
+				IOLog("OP2I2C: capacitive Home button %s (px=%u py=%u)\n",
+				    down ? "DOWN" : "UP  ", px, py);
+			}
 			posts++;
 			if (down != prevDown || (moveLogs++ % 50) == 0) {
 				IOLog("OP2I2C: finger %s x=%u y=%u z=%u (polls=%u posts=%u)\n",
