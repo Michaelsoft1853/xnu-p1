@@ -456,8 +456,7 @@ OP2Digitizer::postHomeButtonEvent(uint32_t down)
 	if (gOP2Buttons != NULL) {
 		gOP2Buttons->key(0x0040, down);
 	}
-	/* Also enqueue to digitizer queue so no events are lost if backboardd
-	 * or assistive services are still reading from digitizer. */
+	/* Enqueue to digitizer queue so backboardd receives the home button wake/unlock event */
 	if (!fQueue) return;
 
 	IOHIDKeyboardPacket pkt;
@@ -673,14 +672,10 @@ OP2Digitizer::tapTimerFired(OSObject *owner, IOTimerEventSource *sender)
 			s_last_tracked_shown = cur_shown;
 		}
 
-		uint32_t n = op2_autotap_count++;
-		if ((n % 20) == 19) {
-			/* Every 20 cycles (~50s), perform awake Home sequence: wake + unlock pulse */
-			IOLog("OP2 Digitizer: [HOME SCREEN %u] periodic Home keep-alive\n", n);
-			me->postHomeButtonEvent(1);
-			me->fTapStep = 17;
-			sender->setTimeoutMS(120);
-			break;
+		/* Pure micro-tap keepalive (keeps display awake without button triggers) */
+		uint32_t n = ++op2_autotap_count;
+		if ((n % 40) == 0) {
+			IOLog("OP2 Digitizer: micro-tap keepalive active (tick %u)\n", n);
 		}
 		me->postDigitizerEvent(1, 0x0100, 0x0100, 0, true);
 		me->fTapStep = 16;
@@ -1074,15 +1069,12 @@ OP2ButtonsUserClient::registerNotificationPort(mach_port_t port, UInt32 type, io
 	if (fOwner && fOwner->getQueue()) {
 		char name[32] = {0};
 		proc_selfname(name, sizeof(name));
-		if (strcmp(name, "SpringBoard") == 0 || strcmp(name, "backboardd") == 0) {
-			IOLog("OP2 Buttons: %s set notification port %p (refCon %llu)\n", name, (void *)port, refCon);
+		if (strcmp(name, "backboardd") == 0) {
+			IOLog("OP2 Buttons: backboardd set notification port %p (refCon %llu)\n", (void *)port, refCon);
 			fOwner->setHasNotificationPort(true);
 			fOwner->getQueue()->setNotificationPort(port);
-		} else if (!fOwner->hasNotificationPort()) {
-			IOLog("OP2 Buttons: %s set provisional notification port %p\n", name, (void *)port);
-			fOwner->getQueue()->setNotificationPort(port);
 		} else {
-			IOLog("OP2 Buttons: ignoring notification port from %s (preserving active port)\n", name);
+			IOLog("OP2 Buttons: ignoring notification port from %s (preserving backboardd port)\n", name);
 		}
 		return kIOReturnSuccess;
 	}

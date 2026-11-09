@@ -432,7 +432,7 @@ AppleCLCD::start(IOService *provider)
 		IOLog("OP2 FB: no vsync timer\n");
 		return false;
 	}
-	uint32_t hz = 15;
+	uint32_t hz = 60;
 	PE_parse_boot_argn("op2fb_hz", &hz, sizeof(hz));
 	fFlushTicks = (hz == 0 || hz >= 60) ? 1 : 60 / hz;
 	int cui = 1;
@@ -940,24 +940,37 @@ AppleCLCD::present(const uint8_t *rec)
 				}
 				uint64_t last_retina = (uint64_t)s->offset + (uint64_t)2207 * s->bytesPerRow + (uint64_t)1242 * 4;
 				if (s->memory != NULL && last_retina <= s->memory->getLength()) {
+					uint64_t t0 = mach_absolute_time();
 					for (int32_t y = 0; y < (int32_t)fHeight; y++) {
 						uint32_t sy_coord = sy_map[y];
 						const uint32_t *src_row = (const uint32_t *)(src + s->offset + (uint64_t)sy_coord * s->bytesPerRow);
 						uint32_t *dst_row = (uint32_t *)(fPixels + (uint64_t)y * fRowBytes);
+						uint64_t *dst_row64 = (uint64_t *)(fPixels + (uint64_t)y * fRowBytes);
 						int32_t x = 0;
 						for (; x <= (int32_t)fWidth - 8; x += 8) {
-							dst_row[x + 0] = src_row[sx_map[x + 0]];
-							dst_row[x + 1] = src_row[sx_map[x + 1]];
-							dst_row[x + 2] = src_row[sx_map[x + 2]];
-							dst_row[x + 3] = src_row[sx_map[x + 3]];
-							dst_row[x + 4] = src_row[sx_map[x + 4]];
-							dst_row[x + 5] = src_row[sx_map[x + 5]];
-							dst_row[x + 6] = src_row[sx_map[x + 6]];
-							dst_row[x + 7] = src_row[sx_map[x + 7]];
+							uint64_t p0 = (uint32_t)src_row[sx_map[x + 0]];
+							uint64_t p1 = (uint32_t)src_row[sx_map[x + 1]];
+							uint64_t p2 = (uint32_t)src_row[sx_map[x + 2]];
+							uint64_t p3 = (uint32_t)src_row[sx_map[x + 3]];
+							uint64_t p4 = (uint32_t)src_row[sx_map[x + 4]];
+							uint64_t p5 = (uint32_t)src_row[sx_map[x + 5]];
+							uint64_t p6 = (uint32_t)src_row[sx_map[x + 6]];
+							uint64_t p7 = (uint32_t)src_row[sx_map[x + 7]];
+
+							dst_row64[(x >> 1) + 0] = (p1 << 32) | p0;
+							dst_row64[(x >> 1) + 1] = (p3 << 32) | p2;
+							dst_row64[(x >> 1) + 2] = (p5 << 32) | p4;
+							dst_row64[(x >> 1) + 3] = (p7 << 32) | p6;
 						}
 						for (; x < (int32_t)fWidth; x++) {
 							dst_row[x] = src_row[sx_map[x]];
 						}
+					}
+					uint64_t dt = mach_absolute_time() - t0;
+					uint32_t us = (uint32_t)((dt * 10) / 192);
+					static uint32_t sDownsampleLogged = 0;
+					if (++sDownsampleLogged <= 5 || (sDownsampleLogged % 60) == 0) {
+						IOLog("OP2 FB: downsample 1242x2208->1080x1920 took %u us (frame #%u)\n", us, sDownsampleLogged);
 					}
 				}
 			} else {
