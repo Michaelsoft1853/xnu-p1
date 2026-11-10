@@ -926,13 +926,9 @@ AppleCLCD::present(const uint8_t *rec)
 		uint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;
 		if (src != 0 && bpe == 4 && fPixels != 0) {
 			if (s->width == 1242 && s->height == 2208) {
-				static uint32_t sx_map[1080];
 				static uint32_t sy_map[1920];
 				static bool maps_ready = false;
 				if (!maps_ready) {
-					for (int32_t x = 0; x < 1080; x++) {
-						sx_map[x] = (uint32_t)(((uint64_t)x * 1242) / 1080);
-					}
 					for (int32_t y = 0; y < 1920; y++) {
 						sy_map[y] = (uint32_t)(((uint64_t)y * 2208) / 1920);
 					}
@@ -945,25 +941,43 @@ AppleCLCD::present(const uint8_t *rec)
 						uint32_t sy_coord = sy_map[y];
 						const uint32_t *src_row = (const uint32_t *)(src + s->offset + (uint64_t)sy_coord * s->bytesPerRow);
 						uint32_t *dst_row = (uint32_t *)(fPixels + (uint64_t)y * fRowBytes);
-						uint64_t *dst_row64 = (uint64_t *)(fPixels + (uint64_t)y * fRowBytes);
-						int32_t x = 0;
-						for (; x <= (int32_t)fWidth - 8; x += 8) {
-							uint64_t p0 = (uint32_t)src_row[sx_map[x + 0]];
-							uint64_t p1 = (uint32_t)src_row[sx_map[x + 1]];
-							uint64_t p2 = (uint32_t)src_row[sx_map[x + 2]];
-							uint64_t p3 = (uint32_t)src_row[sx_map[x + 3]];
-							uint64_t p4 = (uint32_t)src_row[sx_map[x + 4]];
-							uint64_t p5 = (uint32_t)src_row[sx_map[x + 5]];
-							uint64_t p6 = (uint32_t)src_row[sx_map[x + 6]];
-							uint64_t p7 = (uint32_t)src_row[sx_map[x + 7]];
 
-							dst_row64[(x >> 1) + 0] = (p1 << 32) | p0;
-							dst_row64[(x >> 1) + 1] = (p3 << 32) | p2;
-							dst_row64[(x >> 1) + 2] = (p5 << 32) | p4;
-							dst_row64[(x >> 1) + 3] = (p7 << 32) | p6;
-						}
-						for (; x < (int32_t)fWidth; x++) {
-							dst_row[x] = src_row[sx_map[x]];
+						/*
+						 * High-Speed 20-pixel Block Downsampler (1242 -> 1080):
+						 * 1080 = 54 blocks of 20 pixels; 1242 = 54 blocks of 23 pixels.
+						 * Block pattern: 7 contiguous pixels, skip 1, 7 contiguous pixels, skip 1, 6 contiguous pixels, skip 2.
+						 * Aligned 64-bit pair loads/stores with zero lookup table overhead.
+						 */
+						for (int32_t b = 0; b < 54; b++) {
+							const uint32_t *sp = src_row + b * 23;
+							uint32_t *dp = dst_row + b * 20;
+
+							const uint64_t *sp64 = (const uint64_t *)(uintptr_t)sp;
+							uint64_t *dp64 = (uint64_t *)(uintptr_t)dp;
+
+							/* Pixels 0..5 (3x 64-bit) + pixel 6 */
+							dp64[0] = sp64[0];
+							dp64[1] = sp64[1];
+							dp64[2] = sp64[2];
+							dp[6]   = sp[6];
+
+							/* Pixel 7 (skip sp[7]) */
+							dp[7]   = sp[8];
+
+							/* Pixels 8..13 (3x 64-bit) from sp[9..14] */
+							const uint64_t *sp_mid64 = (const uint64_t *)(uintptr_t)(sp + 9);
+							uint64_t *dp_mid64 = (uint64_t *)(uintptr_t)(dp + 8);
+							dp_mid64[0] = sp_mid64[0];
+							dp_mid64[1] = sp_mid64[1];
+							dp_mid64[2] = sp_mid64[2];
+
+							/* Pixels 14..19 (3x 64-bit) from sp[16..21] (skip sp[15]) */
+							const uint64_t *sp_end64 = (const uint64_t *)(uintptr_t)(sp + 16);
+							uint64_t *dp_end64 = (uint64_t *)(uintptr_t)(dp + 14);
+							dp_end64[0] = sp_end64[0];
+							dp_end64[1] = sp_end64[1];
+							dp_end64[2] = sp_end64[2];
+							/* sp[22] is skipped */
 						}
 					}
 					uint64_t dt = mach_absolute_time() - t0;

@@ -819,7 +819,9 @@ static void op2_emmc_strategy(buf_t bp)
 		uint64_t lba = op2_emmc.first_block + ((off + done_bytes) / EMMC_SECTOR_SIZE);
 		uint32_t chunk = MIN(EMMC_SECTOR_SIZE, count - done_bytes);
 		if (buf_flags(bp) & B_READ) {
-			int rc = op2_emmc_read_retry((uint32_t)lba, op2_sector_buf);
+			uint8_t *dst = (chunk == EMMC_SECTOR_SIZE && (((uintptr_t)vaddr + done_bytes) & 3) == 0) ?
+			    (uint8_t *)vaddr + done_bytes : op2_sector_buf;
+			int rc = op2_emmc_read_retry((uint32_t)lba, dst);
 			if (rc) {
 				op2_emmc_fail_rd++;
 				op2_emmc_fail_record('R', lba, rc, (uint64_t)buf_blkno(bp), count);
@@ -840,7 +842,9 @@ static void op2_emmc_strategy(buf_t bp)
 				    (unsigned long long)op2_emmc_fail_map,
 				    (unsigned long long)op2_emmc_fail_oob);
 			}
-			memcpy(vaddr + done_bytes, op2_sector_buf, chunk);
+			if (dst == op2_sector_buf) {
+				memcpy(vaddr + done_bytes, op2_sector_buf, chunk);
+			}
 		} else {
 			if (chunk < EMMC_SECTOR_SIZE) {
 				int rc = op2_emmc_read_retry((uint32_t)lba, op2_sector_buf);
