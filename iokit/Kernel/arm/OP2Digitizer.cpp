@@ -452,11 +452,24 @@ OP2Digitizer::postDigitizerEvent(uint32_t touchDown, uint32_t x_fp16, uint32_t y
 void
 OP2Digitizer::postHomeButtonEvent(uint32_t down)
 {
-	/* Deliver to Consumer-typed button service (OP2Buttons). */
-	if (gOP2Buttons != NULL) {
-		gOP2Buttons->key(0x0040, down);
+	/*
+	 * Deliver each press ONCE. Posting on both OP2Buttons and the digitizer
+	 * queue made backboardd see two presses -> iOS double-click Home ->
+	 * app switcher. boot-arg op2_homepath: 1 = OP2Buttons (default),
+	 * 2 = digitizer queue, 3 = both (old behaviour).
+	 */
+	static uint32_t sHomePath = 0;
+	if (sHomePath == 0) {
+		sHomePath = 1;
+		PE_parse_boot_argn("op2_homepath", &sHomePath, sizeof(sHomePath));
 	}
-	/* Enqueue to digitizer queue so backboardd receives the home button wake/unlock event */
+	if ((sHomePath & 1) && gOP2Buttons != NULL) {
+		gOP2Buttons->key(0x0040, down);
+		if (!(sHomePath & 2)) {
+			return;
+		}
+	}
+	/* Fallback / mode 2: digitizer queue */
 	if (!fQueue) return;
 
 	IOHIDKeyboardPacket pkt;
@@ -497,6 +510,7 @@ extern "C" uint32_t op2_fb_get_last_nz(void);
  * pass). Drives renders for crash reproduction with nobody watching. */
 static uint32_t op2_autotap_ms = 0;
 static int op2_autotap_parsed = 0;
+static uint32_t op2_autoinput_mode = 1; /* boot-arg op2_autoinput */
 static uint32_t op2_autotap_count = 0;
 
 void
@@ -508,9 +522,23 @@ OP2Digitizer::tapTimerFired(OSObject *owner, IOTimerEventSource *sender)
 	if (!op2_autotap_parsed) {
 		op2_autotap_parsed = 1;
 		PE_parse_boot_argn("op2_tapms", &op2_autotap_ms, sizeof(op2_autotap_ms));
-		if (op2_autotap_ms != 0) {
-			IOLog("OP2 Digitizer: autotap enabled every %u ms\n", op2_autotap_ms);
-		}
+		PE_parse_boot_argn("op2_autoinput", &op2_autoinput_mode, sizeof(op2_autoinput_mode));
+		IOLog("OP2 Digitizer: synthetic input mode %u (0=off, 1=wake-only, 2=full test script)\n",
+		    op2_autoinput_mode);
+	}
+
+	/*
+	 * Synthetic input is a test harness, not a feature. In normal use it
+	 * fought the real user (Home presses / swipes / taps every 2.5 s and a
+	 * forced re-unlock whenever an app created new surfaces). Default is
+	 * wake-only: pulse Home until the Lock Screen is lit, then stop forever.
+	 */
+	if (op2_autoinput_mode == 0) {
+		return;
+	}
+	if (op2_autoinput_mode == 1 && me->fTapStep != 0 && me->fTapStep != 18) {
+		IOLog("OP2 Digitizer: wake-only mode: Lock Screen is up, synthetic input stopped\n");
+		return;
 	}
 
 	switch (me->fTapStep) {

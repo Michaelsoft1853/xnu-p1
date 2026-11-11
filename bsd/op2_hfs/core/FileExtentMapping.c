@@ -441,7 +441,24 @@ OSErr MapFileBlockC (
 		 */
 		if (tmpOff <= 0) {
 			/* This shouldn't happen unless something is corrupt */
-			hfs_corruption_debug("MapFileBlockC: tmpOff <= 0 (%lld)\n", tmpOff);
+			/* OP2: identify the file instead of 3000 anonymous lines.
+			 * First report per file id, at most 24 files per boot. */
+			{
+				static uint32_t seen[24];
+				static uint32_t nseen = 0;
+				static uint64_t total = 0;
+				uint32_t id = (fcb->ff_cp != NULL) ? FTOC(fcb)->c_fileid : 0;
+				uint32_t k;
+				total++;
+				for (k = 0; k < nseen && seen[k] != id; k++) {
+				}
+				if (k == nseen && nseen < 24) {
+					seen[nseen++] = id;
+					printf("OP2 HFS: read at/after PEOF: fileid=%u off=%lld size=%lld blocks=%u blksz=%u extEnd=%u (hit #%llu)\n",
+					    id, (long long)offset, (long long)fcb->ff_size, fcb->ff_blocks,
+					    (unsigned)allocBlockSize, (unsigned)nextFABN, (unsigned long long)total);
+				}
+			}
 			return EINVAL;
 		}
 

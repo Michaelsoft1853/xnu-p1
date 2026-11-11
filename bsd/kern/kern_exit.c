@@ -878,6 +878,30 @@ op2_dump_exit_ring(void)
 	unsigned first = nrec > OP2_EXIT_RING_N ? nrec - OP2_EXIT_RING_N : 0;
 	kprintf("OP2 EXIT RING: %u deaths recorded%s, %u storm deaths dropped (budget)\n", nrec,
 	    nrec > OP2_EXIT_RING_N ? " (showing last 256)" : "", op2_exit_dropped);
+	{
+		/* ramoops-visible crash census: signal deaths only, last 40. */
+		unsigned crashes = 0, shown = 0;
+		for (unsigned i = first; i < nrec; i++) {
+			if (op2_exit_ring[i % OP2_EXIT_RING_N].sig != 0) {
+				crashes++;
+			}
+		}
+		printf("OP2 CRASHES: %u signal deaths among %u recorded exits (%u dropped by budget)\n",
+		    crashes, nrec, op2_exit_dropped);
+		for (unsigned i = first; i < nrec; i++) {
+			struct op2_exit_ent *e = &op2_exit_ring[i % OP2_EXIT_RING_N];
+			if (e->sig == 0 || crashes - shown > 40) {
+				if (e->sig != 0) {
+					shown++;
+				}
+				continue;
+			}
+			shown++;
+			printf("OP2 CRASH #%u: pid=%d[%s] sig=%d pc=0x%llx lr=0x%llx exec=0x%llx stk=0x%llx,0x%llx,0x%llx,0x%llx\n",
+			    i, e->pid, e->comm, e->sig, e->pc, e->lr, e->exec,
+			    e->stk[0], e->stk[1], e->stk[2], e->stk[3]);
+		}
+	}
 	for (unsigned i = first; i < nrec; i++) {
 		struct op2_exit_ent *e = &op2_exit_ring[i % OP2_EXIT_RING_N];
 		kprintf("OP2 EXIT #%u: pid=%d[%s] sig=%d code=%d "
@@ -925,6 +949,15 @@ exit_with_reason(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, 
 		extern boolean_t op2_crash_budget(const char *comm);
 		extern boolean_t op2_crash_quiet;
 		op2_crash_quiet = !op2_crash_budget(p->p_comm);
+		/* printf, not kprintf: kprintf only reaches ramoops with serial=3,
+		 * which the boot line dropped, so every crash went unlogged.
+		 * Clean exits (sig 0, status 0) stay quiet. */
+		if (!op2_crash_quiet && (WTERMSIG(rv) != 0 || WEXITSTATUS(rv) != 0)) {
+			printf("PROC_EXIT: pid=%d[%s] rv=0x%x (sig %d, exit %d) reason_ns=%u code=0x%llx\n",
+			        p->p_pid, p->p_comm, rv, WTERMSIG(rv), WEXITSTATUS(rv),
+			        exit_reason ? exit_reason->osr_namespace : 0,
+			        exit_reason ? exit_reason->osr_code : 0);
+		}
 		if (!op2_crash_quiet) {
 			kprintf("PROC_EXIT: pid=%d[%s] rv=0x%x (sig %d, exit %d) reason_ns=%u code=0x%llx\n",
 			        p->p_pid, p->p_comm, rv, WTERMSIG(rv), WEXITSTATUS(rv),

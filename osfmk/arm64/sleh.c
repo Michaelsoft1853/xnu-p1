@@ -240,7 +240,7 @@ op2_log_user_state(const char *prefix, int pid, const char *comm)
 		fp = frame[0];
 	}
 	if (!op2_crash_quiet) {
-		kprintf("%s: pid=%d[%s] pc=0x%llx lr=0x%llx sp=0x%llx x0=0x%llx x1=0x%llx x16=0x%llx\n",
+		printf("%s: pid=%d[%s] pc=0x%llx lr=0x%llx sp=0x%llx x0=0x%llx x1=0x%llx x16=0x%llx\n",
 		        prefix, pid, comm,
 		        (unsigned long long)s64->pc, (unsigned long long)s64->lr,
 		        (unsigned long long)s64->sp, (unsigned long long)s64->x[0],

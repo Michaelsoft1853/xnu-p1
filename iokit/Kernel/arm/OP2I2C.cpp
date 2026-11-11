@@ -21,6 +21,7 @@
 #include <IOKit/IOLib.h>
 #include <kern/clock.h>
 #include <kern/thread.h>
+#include <pexpert/pexpert.h>
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern "C" void op2_digitizer_post(uint32_t touchDown, uint32_t x_fp16, uint32_t y_fp16, uint32_t z_raw);
@@ -375,6 +376,9 @@ void
 OP2I2C::pollLoop(void)
 {
 	bool prevDown = false;
+	bool homeTouch = false;
+	uint32_t kHomeStripY = 1880;
+	PE_parse_boot_argn("op2_homey", &kHomeStripY, sizeof(kHomeStripY));
 	uint32_t lastX = 0, lastY = 0;
 	uint32_t polls = 0, posts = 0, moveLogs = 0;
 	uint32_t errCount = 0;
@@ -438,11 +442,28 @@ OP2I2C::pollLoop(void)
 			uint32_t py = down ? y : lastY;
 			uint32_t xfp = (px * 65536U) / 1080U;
 			uint32_t yfp = (py * 65536U) / 1920U;
-			op2_digitizer_post(down ? 1 : 0, xfp, yfp, f[5]);
-			if (down != prevDown && py > 1820 && px > 360 && px < 720) {
-				op2_home_button_post(down ? 1 : 0);
-				IOLog("OP2I2C: capacitive Home button %s (px=%u py=%u)\n",
-				    down ? "DOWN" : "UP  ", px, py);
+			/*
+			 * Virtual Home key: a touch that STARTS on the bottom edge
+			 * strip, centre third (where the glass meets the home key).
+			 * The whole touch is consumed as Home and never reaches iOS
+			 * as a tap, so it cannot hit the dock or start a Control
+			 * Center swipe, and dock taps (above the strip) never press
+			 * Home. Old code: any y>1820 was BOTH a tap and a Home press.
+			 */
+			if (down && !prevDown) {
+				homeTouch = (py >= kHomeStripY && px > 300 && px < 780);
+			}
+			if (homeTouch) {
+				if (down != prevDown) {
+					op2_home_button_post(down ? 1 : 0);
+					IOLog("OP2I2C: Home key %s (px=%u py=%u)\n",
+					    down ? "DOWN" : "UP  ", px, py);
+				}
+			} else {
+				op2_digitizer_post(down ? 1 : 0, xfp, yfp, f[5]);
+			}
+			if (!down) {
+				homeTouch = false;
 			}
 			posts++;
 			if (down != prevDown || (moveLogs++ % 50) == 0) {

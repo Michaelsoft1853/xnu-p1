@@ -22,6 +22,8 @@
 #include <arm/pmap.h>
 #include <vm/vm_map.h>
 #include <pexpert/pexpert.h>
+#include <kern/timer.h>
+#include <kern/clock.h>
 
 extern void proc_name_kdp(task_t task, char * buf, int size);
 extern int proc_pid_kdp(task_t task);
@@ -223,6 +225,151 @@ op2_snapshot_task(const char *want, int shot)
 	task_deallocate(task);
 }
 
+
+/*
+ * OP2 TOP: every op2_top seconds (default 30, 0 = off) log the processes
+ * that used the most CPU in the interval, as % of ONE core (4 cores = 400%).
+ * Reads per-thread user/system timers under task_lock; no allocation.
+ */
+#define OP2_TOP_MAX 192
+struct op2_top_ent {
+	int      pid;
+	uint64_t total;
+	uint64_t delta;
+	char     name[16];
+};
+static struct op2_top_ent op2_top_cur[OP2_TOP_MAX];
+static struct op2_top_ent op2_top_prev[OP2_TOP_MAX];
+static int op2_top_prev_n = 0;
+static uint64_t op2_top_last_blk = 0, op2_top_last_mcmd = 0;
+extern uint64_t op2_emmc_blocks_read(void);
+extern uint64_t op2_emmc_multi_count(void);
+extern void op2_fs_sync(void);
+extern uint32_t op2_cpu_mhz_now;
+
+static void
+op2_top_sample(uint64_t interval_abs)
+{
+	int n = 0;
+	task_t t;
+
+	lck_mtx_lock(&tasks_threads_lock);
+	queue_iterate(&tasks, t, task_t, tasks) {
+		if (n >= OP2_TOP_MAX) {
+			break;
+		}
+		if (!t->active) {
+			continue;
+		}
+		uint64_t total;
+		thread_t th;
+		task_lock(t);
+		total = t->total_user_time + t->total_system_time;
+		queue_iterate(&t->threads, th, thread_t, task_threads) {
+			if (th->state & TH_IDLE) {
+				continue;   /* per-CPU idle threads live in kernel_task */
+			}
+			total += timer_grab(&th->user_timer) + timer_grab(&th->system_timer);
+		}
+		task_unlock(t);
+		struct op2_top_ent *e = &op2_top_cur[n++];
+		e->pid = (t->bsd_info != NULL) ? proc_pid_kdp(t) : 0;
+		e->total = total;
+		e->delta = 0;
+		if (t->bsd_info != NULL) {
+			proc_name_kdp(t, e->name, sizeof(e->name));
+		} else {
+			strlcpy(e->name, "kernel_task", sizeof(e->name));
+		}
+	}
+	lck_mtx_unlock(&tasks_threads_lock);
+
+	uint64_t sum = 0;
+	for (int i = 0; i < n; i++) {
+		struct op2_top_ent *e = &op2_top_cur[i];
+		for (int j = 0; j < op2_top_prev_n; j++) {
+			if (op2_top_prev[j].pid == e->pid && e->total >= op2_top_prev[j].total) {
+				e->delta = e->total - op2_top_prev[j].total;
+				break;
+			}
+		}
+		sum += e->delta;
+	}
+
+	if (op2_top_prev_n > 0 && interval_abs > 0) {
+		char line[256];
+		uint64_t blk = op2_emmc_blocks_read();
+		uint64_t mcmd = op2_emmc_multi_count();
+		uint64_t secs = interval_abs / 19200000ULL;
+		if (secs == 0) {
+			secs = 1;
+		}
+		int len = snprintf(line, sizeof(line), "OP2 TOP: %uMHz busy %llu%%/400 emmc %lluKB/s (%llu multi):",
+		    op2_cpu_mhz_now, (sum * 100ULL) / interval_abs,
+		    ((blk - op2_top_last_blk) / 2ULL) / secs, mcmd - op2_top_last_mcmd);
+		op2_top_last_blk = blk;
+		op2_top_last_mcmd = mcmd;
+		for (int k = 0; k < 7; k++) {
+			int best = -1;
+			for (int i = 0; i < n; i++) {
+				if (op2_top_cur[i].delta > 0 &&
+				    (best < 0 || op2_top_cur[i].delta > op2_top_cur[best].delta)) {
+					best = i;
+				}
+			}
+			if (best < 0) {
+				break;
+			}
+			uint64_t pct = (op2_top_cur[best].delta * 100ULL) / interval_abs;
+			if (pct == 0) {
+				break;
+			}
+			if (len > 0 && len < (int)sizeof(line)) {
+				len += snprintf(line + len, sizeof(line) - len, " %s(%d)=%llu%%",
+				    op2_top_cur[best].name, op2_top_cur[best].pid, pct);
+			}
+			op2_top_cur[best].delta = 0;
+		}
+		printf("%s\n", line);
+	}
+
+	for (int i = 0; i < n; i++) {
+		op2_top_prev[i] = op2_top_cur[i];
+	}
+	op2_top_prev_n = n;
+}
+
+static uint32_t op2_top_interval = 30;
+
+static void __attribute__((noreturn))
+op2_top_thread(void *param, wait_result_t wr)
+{
+	(void)param;
+	(void)wr;
+	uint64_t last = mach_absolute_time();
+	uint32_t deadline = 0;
+	int synced = 0;
+	PE_parse_boot_argn("op2_deadline", &deadline, sizeof(deadline));
+	op2_top_sample(0);
+	for (;;) {
+		IOSleep(op2_top_interval * 1000);
+		uint64_t now = mach_absolute_time();
+		op2_top_sample(now - last);
+		last = now;
+		/* Two syncs in the last ~40 s before the deadline reset. */
+		if (deadline > 60) {
+			uint64_t secs = now / 19200000ULL;
+			if (synced == 0 && secs + 45 >= deadline) {
+				op2_fs_sync();
+				synced = 1;
+			} else if (synced == 1 && secs + 15 >= deadline) {
+				op2_fs_sync();
+				synced = 2;
+			}
+		}
+	}
+}
+
 static uint32_t op2_snap_deadline = 0;
 
 static void __attribute__((noreturn))
@@ -266,6 +413,14 @@ op2_threaddump_start(void)
 		return;
 	}
 	started = TRUE;
+	PE_parse_boot_argn("op2_top", &op2_top_interval, sizeof(op2_top_interval));
+	if (op2_top_interval != 0) {
+		thread_t topth;
+		if (kernel_thread_start(op2_top_thread, NULL, &topth) == KERN_SUCCESS) {
+			thread_deallocate(topth);
+			printf("OP2: CPU top sampler every %us\n", op2_top_interval);
+		}
+	}
 	PE_parse_boot_argn("op2_deadline", &deadline, sizeof(deadline));
 	PE_parse_boot_argn("op2_threaddump", &enable, sizeof(enable));
 	if (deadline == 0 || !enable) {

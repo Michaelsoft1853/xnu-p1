@@ -507,6 +507,107 @@ static int sdhc_read_single_block(uint32_t lba, uint8_t *buf)
 	return 0;
 }
 
+/*
+ * Multi-block PIO read (CMD18 + Auto-CMD12). One command per run of up to
+ * 128 sectors instead of one CMD17 per 512 bytes: removes 7 of every 8
+ * command round-trips on a 4 KB page-in. Same error codes as the single
+ * path; the caller falls back to single-block reads on any failure.
+ */
+#define SDHCI_TRNS_AUTO_CMD12 (1u << 2)
+#define SDHCI_TRNS_MULTI      (1u << 5)
+static uint64_t op2_emmc_multi_cmds = 0, op2_emmc_multi_fails = 0;
+static int op2_emmc_multi_ok = -1;   /* -1 = boot-arg not parsed yet */
+
+static int sdhc_read_multi_block(uint32_t lba, uint8_t *buf, uint32_t nblk)
+{
+	uint64_t start = ml_get_timebase();
+	uint64_t ticks = 500000ULL * 192ULL / 10ULL;
+
+	if (op2_emmc_dat0_wait() != 0) {
+		op2_emmc_card_abort();
+		return -1;
+	}
+	while (sdhc_rd32(SDHCI_PRESENT_STATE) & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT)) {
+		if (ml_get_timebase() - start >= ticks) {
+			sdhc_wr8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+			op2_emmc_card_abort();
+			return -1;
+		}
+		__asm__ volatile("isb");
+	}
+
+	sdhc_wr32(SDHCI_INT_STATUS, 0xFFFFFFFF);
+	sdhc_wr16(SDHCI_BLOCK_SIZE, 512);
+	sdhc_wr16(SDHCI_BLOCK_COUNT, (uint16_t)nblk);
+	sdhc_wr32(SDHCI_ARGUMENT, lba);
+	sdhc_wr16(SDHCI_TRANSFER_MODE, SDHCI_TRNS_READ | SDHCI_TRNS_BLK_CNT_EN |
+	    SDHCI_TRNS_MULTI | SDHCI_TRNS_AUTO_CMD12);
+
+	uint16_t cmd_flags = SDHCI_CMD_DATA_PRESENT | SDHCI_CMD_INDEX_CHECK | SDHCI_CMD_CRC_CHECK | SDHCI_CMD_RESP_SHORT;
+	sdhc_wr16(SDHCI_COMMAND, (18 << 8) | cmd_flags);
+
+	start = ml_get_timebase();
+	ticks = 100000ULL * 192ULL / 10ULL;
+	uint32_t is = 0;
+	while (ml_get_timebase() - start < ticks) {
+		is = sdhc_rd32(SDHCI_INT_STATUS);
+		if (is & (SDHCI_INT_RESPONSE | SDHCI_INT_ERROR))
+			break;
+		__asm__ volatile("isb");
+	}
+	if ((is & SDHCI_INT_ERROR) || !(is & SDHCI_INT_RESPONSE)) {
+		sdhc_wr32(SDHCI_INT_STATUS, is);
+		sdhc_wr8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+		op2_emmc_card_abort();
+		return -2;
+	}
+	sdhc_wr32(SDHCI_INT_STATUS, SDHCI_INT_RESPONSE);
+
+	uint32_t *p = (uint32_t *)(void *)buf;
+	for (uint32_t b = 0; b < nblk; b++) {
+		start = ml_get_timebase();
+		ticks = 200000ULL * 192ULL / 10ULL;
+		int data_ready = 0;
+		while (ml_get_timebase() - start < ticks) {
+			is = sdhc_rd32(SDHCI_INT_STATUS);
+			if (is & SDHCI_INT_ERROR)
+				break;
+			if ((is & SDHCI_INT_DATA_AVAIL) || (sdhc_rd32(SDHCI_PRESENT_STATE) & SDHCI_BUFFER_READ_EN)) {
+				data_ready = 1;
+				break;
+			}
+			__asm__ volatile("isb");
+		}
+		if (!data_ready || (is & SDHCI_INT_ERROR)) {
+			sdhc_wr32(SDHCI_INT_STATUS, is);
+			sdhc_wr8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+			op2_emmc_card_abort();
+			return -3;
+		}
+		sdhc_wr32(SDHCI_INT_STATUS, SDHCI_INT_DATA_AVAIL);
+		for (int i = 0; i < 128; i++) {
+			*p++ = sdhc_rd32(SDHCI_BUFFER);
+		}
+	}
+
+	start = ml_get_timebase();
+	ticks = 200000ULL * 192ULL / 10ULL;
+	while (ml_get_timebase() - start < ticks) {
+		is = sdhc_rd32(SDHCI_INT_STATUS);
+		if (is & (SDHCI_INT_DATA_END | SDHCI_INT_ERROR))
+			break;
+		__asm__ volatile("isb");
+	}
+	if ((is & SDHCI_INT_ERROR) || !(is & SDHCI_INT_DATA_END)) {
+		sdhc_wr32(SDHCI_INT_STATUS, is);
+		sdhc_wr8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+		op2_emmc_card_abort();
+		return -4;
+	}
+	sdhc_wr32(SDHCI_INT_STATUS, 0xFFFFFFFF);
+	return 0;
+}
+
 static int sdhc_write_single_block(uint32_t lba, const uint8_t *buf)
 {
 	uint64_t start = ml_get_timebase();
@@ -696,12 +797,46 @@ struct op2_emmc_fail_ent {
 static struct op2_emmc_fail_ent op2_emmc_fail_ring[OP2_EMMC_FAIL_RING_N];
 static unsigned op2_emmc_fail_count = 0;
 
+/*
+ * Flush every mounted filesystem (same as the sync(2) syscall). Called
+ * shortly before the op2_deadline reset so the non-clean reboot does not
+ * leave half-written HFS metadata behind (allocation bitmap / catalog
+ * damage accumulated over dozens of hard resets before this existed).
+ */
+struct sync_args;
+extern int sync(proc_t p, struct sync_args *uap, int32_t *retval);
+void op2_fs_sync(void);
+void
+op2_fs_sync(void)
+{
+	int32_t rv = 0;
+	sync(kernproc, NULL, &rv);
+	printf("OP2: filesystems synced (pre-reset)\n");
+}
+
+uint64_t op2_emmc_blocks_read(void);
+uint64_t
+op2_emmc_blocks_read(void)
+{
+	return op2_emmc_read_blocks;
+}
+
+uint64_t op2_emmc_multi_count(void);
+uint64_t
+op2_emmc_multi_count(void)
+{
+	return op2_emmc_multi_cmds;
+}
+
 void op2_emmc_dump_stats(void);
 void
 op2_emmc_dump_stats(void)
 {
 	unsigned nrec = op2_emmc_fail_count;
 	unsigned first = nrec > OP2_EMMC_FAIL_RING_N ? nrec - OP2_EMMC_FAIL_RING_N : 0;
+	printf("OP2 eMMC MULTI: cmds=%llu fails=%llu enabled=%d\n",
+	    (unsigned long long)op2_emmc_multi_cmds, (unsigned long long)op2_emmc_multi_fails,
+	    op2_emmc_multi_ok);
 	printf("OP2 eMMC STATS: reads=%llu rd_fail=%llu wr_fail=%llu map_fail=%llu oob=%llu retry_ok=%llu wr_retry_ok=%llu recoveries=%llu fails_recorded=%u%s\n",
 	    (unsigned long long)op2_emmc_read_blocks,
 	    (unsigned long long)op2_emmc_fail_rd,
@@ -818,6 +953,58 @@ static void op2_emmc_strategy(buf_t bp)
 	for (uint32_t done_bytes = 0; done_bytes < count; done_bytes += EMMC_SECTOR_SIZE) {
 		uint64_t lba = op2_emmc.first_block + ((off + done_bytes) / EMMC_SECTOR_SIZE);
 		uint32_t chunk = MIN(EMMC_SECTOR_SIZE, count - done_bytes);
+		if (op2_emmc_multi_ok < 0) {
+			int en = 1;
+			PE_parse_boot_argn("op2_emmc_multi", &en, sizeof(en));
+			op2_emmc_multi_ok = en ? 1 : 0;
+			if (op2_emmc_multi_ok) {
+				/* Self-test: 32 sectors via CMD18 must match 32 CMD17 reads
+				 * byte for byte, or multi-block stays off this boot. */
+				static uint8_t st_multi[32 * EMMC_SECTOR_SIZE] __attribute__((aligned(64)));
+				static uint8_t st_single[32 * EMMC_SECTOR_SIZE] __attribute__((aligned(64)));
+				uint32_t st_lba = (uint32_t)(op2_emmc.first_block + 2048);
+				int st_rc = sdhc_read_multi_block(st_lba, st_multi, 32);
+				int st_ok = (st_rc == 0);
+				for (uint32_t k = 0; st_ok && k < 32; k++) {
+					if (op2_emmc_read_retry(st_lba + k, st_single + k * EMMC_SECTOR_SIZE) != 0) {
+						st_ok = 0;
+					}
+				}
+				if (st_ok && memcmp(st_multi, st_single, sizeof(st_multi)) != 0) {
+					st_ok = 0;
+				}
+				op2_emmc_multi_ok = st_ok;
+				printf("OP2 eMMC: multi-block self-test %s (rc=%d)\n", st_ok ? "PASSED" : "FAILED", st_rc);
+			}
+			printf("OP2 eMMC: multi-block reads %s\n", op2_emmc_multi_ok ? "enabled" : "disabled");
+		}
+		if ((buf_flags(bp) & B_READ) && op2_emmc_multi_ok > 0 &&
+		    chunk == EMMC_SECTOR_SIZE &&
+		    ((((uintptr_t)vaddr + done_bytes) & 3) == 0) &&
+		    (count - done_bytes) >= 2 * EMMC_SECTOR_SIZE) {
+			uint32_t nblk = (count - done_bytes) / EMMC_SECTOR_SIZE;
+			if (nblk > 128) {
+				nblk = 128;
+			}
+			int mrc = sdhc_read_multi_block((uint32_t)lba, (uint8_t *)vaddr + done_bytes, nblk);
+			if (mrc == 0) {
+				op2_emmc_read_blocks += nblk;
+				op2_emmc_multi_cmds++;
+				done_bytes += (nblk - 1) * EMMC_SECTOR_SIZE; /* loop adds the last one */
+				buf_setresid(bp, count - (done_bytes + EMMC_SECTOR_SIZE));
+				continue;
+			}
+			op2_emmc_multi_fails++;
+			if (op2_emmc_multi_fails <= 4) {
+				printf("OP2 eMMC: multi-block read failed rc=%d lba=%llu n=%u (fails=%llu), single-block fallback\n",
+				    mrc, (unsigned long long)lba, nblk, (unsigned long long)op2_emmc_multi_fails);
+			}
+			if (op2_emmc_multi_fails >= 8 && op2_emmc_multi_fails * 100 > op2_emmc_multi_cmds) {
+				op2_emmc_multi_ok = 0;
+				printf("OP2 eMMC: multi-block reads DISABLED (too many failures)\n");
+			}
+			/* fall through: this sector via the proven single-block path */
+		}
 		if (buf_flags(bp) & B_READ) {
 			uint8_t *dst = (chunk == EMMC_SECTOR_SIZE && (((uintptr_t)vaddr + done_bytes) & 3) == 0) ?
 			    (uint8_t *)vaddr + done_bytes : op2_sector_buf;

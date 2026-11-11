@@ -27,6 +27,7 @@
  */
 #include "OP2Surface.h"
 #include "OP2GPU.h"
+#include "op2_rpm.h"
 
 #if defined(ARM64_BOARD_CONFIG_MSM8994)
 #include <IOKit/IOService.h>
@@ -39,6 +40,7 @@
 #include <IOKit/system.h>
 #include <pexpert/pexpert.h>
 #include <kern/clock.h>
+#include <kern/thread.h>
 #include <sys/proc.h>
 #include "apple_logo.h"
 
@@ -189,6 +191,30 @@ public:
 	bool          fUserlandTookOver;
 	bool          fClientUI;             /* op2fb_client_ui: show client surfaces when server is blank */
 
+	/*
+	 * Double-buffered panel scanout. Buffer 0 is the LK splash memory
+	 * (fPhys), buffer 1 a carveout slot. present() always writes the
+	 * buffer the panel is NOT reading, then flips VIG0 SRC0 and kicks,
+	 * so a DSI transfer never reads a half-written frame (the old
+	 * "half the screen is stale/blank" tearing).
+	 */
+	uint64_t            fBufPhys[2];
+	uintptr_t           fBufPixels[2];
+	IOMemoryDescriptor *fBufMem;
+	IOMemoryMap        *fBufMap;
+	uint32_t            fFrontBuf;
+	bool                fDoubleBuffer;
+
+	/* Swap completion: SwapEnd arms an immediate present; SwapWait
+	 * blocks the render server until its frame has left its buffer. */
+	IOTimerEventSource *fPresentNow;
+	uint32_t            fLastSwapEndID;
+	uint32_t            fCompletedSwapID;
+	bool                fSwapWaitEnabled;
+
+	static void presentNowFired(OSObject *owner, IOTimerEventSource *sender);
+	void presentPending(void);
+
 	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
 	void addClient(IOMobileFramebufferUserClient *client);
 	void removeClient(IOMobileFramebufferUserClient *client);
@@ -279,7 +305,144 @@ op2_fb_kick_panel_external(void)
 	}
 }
 
+static void op2_cpu_boost(void);
+static void
+op2_cpu_boost_thread(__unused void *param, __unused wait_result_t wr)
+{
+	IOSleep(20000);
+	op2_cpu_boost();
+	/* returning from a kernel thread's entry terminates it */
+}
+
 extern "C" void op2_threaddump_start(void);
+
+/*
+ * Effective CPU clock: count core cycles (PMCCNTR_EL0) across 10 ms of the
+ * 19.2 MHz generic timer. Nothing in this port programs the A53 PLL, so the
+ * cores run at whatever LK left them at; this tells us what that is.
+ * Disable with boot-arg op2_cpumhz=0.
+ */
+extern "C" uint32_t op2_measure_cpu_mhz(void);
+extern "C" uint32_t op2_cpu_mhz_now;
+uint32_t op2_cpu_mhz_now = 0;   /* last measurement, shown on every OP2 TOP line */
+extern "C" uint32_t
+op2_measure_cpu_mhz(void)
+{
+	uint32_t enable = 1;
+	PE_parse_boot_argn("op2_cpumhz", &enable, sizeof(enable));
+	if (enable == 0) {
+		return 0;
+	}
+	boolean_t istate = ml_set_interrupts_enabled(FALSE);
+	uint64_t pmcr = 0;
+	__asm__ volatile("mrs %0, PMCR_EL0" : "=r"(pmcr));
+	__asm__ volatile("msr PMCR_EL0, %0" : : "r"(pmcr | 1ULL | (1ULL << 2)));
+	__asm__ volatile("msr PMCNTENSET_EL0, %0" : : "r"(1ULL << 31));
+	__asm__ volatile("isb" ::: "memory");
+	uint64_t c0 = 0, c1 = 0;
+	uint64_t t0 = mach_absolute_time();
+	__asm__ volatile("mrs %0, PMCCNTR_EL0" : "=r"(c0));
+	while (mach_absolute_time() - t0 < 192000ULL) {
+		/* spin 10 ms */
+	}
+	uint64_t t1 = mach_absolute_time();
+	__asm__ volatile("mrs %0, PMCCNTR_EL0" : "=r"(c1));
+	ml_set_interrupts_enabled(istate);
+	if (t1 <= t0) {
+		return 0;
+	}
+	op2_cpu_mhz_now = (uint32_t)(((c1 - c0) * 192ULL) / ((t1 - t0) * 10ULL));
+	return op2_cpu_mhz_now;
+}
+
+/*
+ * A53 cluster 768 -> 1536 MHz, the way stock Linux does it:
+ *   LK leaves PLL0 at 1536 MHz (L=0x50) feeding the CPUs through the /2
+ *   post-divider (LF mux sel 2), with APC0 (PM8994 S8, FTS2 range0) at the
+ *   NOMINAL-corner 1.0 V. 1536 MHz is fuse corner 4 (TURBO):
+ *   1. vote VDD_MX (smpa2) to SUPER_TURBO via RPM (cpr vdd-mx-corner-map),
+ *   2. APC0 -> 1.145 V (stock open-loop TURBO PVS voltage) via the
+ *      system-cci SAW2 VCTL; must be confirmed by PMIC_STS,
+ *   3. HF mux sel 3 = PLL0 undivided.
+ * Every precondition is checked; any surprise aborts before step 3.
+ * boot-arg op2_cpuboost=0 disables.
+ */
+extern "C" uint32_t op2_measure_cpu_mhz(void);
+static void
+op2_cpu_boost(void)
+{
+	uint32_t en = 1;
+	PE_parse_boot_argn("op2_cpuboost", &en, sizeof(en));
+	if (en == 0) {
+		IOLog("OP2 BOOST: disabled by boot-arg\n");
+		return;
+	}
+	volatile uint32_t *pll = (volatile uint32_t *)ml_io_map(0xf9015000, 0x1000);
+	volatile uint32_t *glb = (volatile uint32_t *)ml_io_map(0xf900d000, 0x1000);
+	volatile uint32_t *saw = (volatile uint32_t *)ml_io_map(0xf9065000, 0x1000);
+	if (pll == NULL || glb == NULL || saw == NULL) {
+		IOLog("OP2 BOOST: abort: map failed\n");
+		return;
+	}
+	uint32_t mode = pll[0x00 / 4], l = pll[0x04 / 4], user = pll[0x10 / 4];
+	uint32_t mux = glb[0x54 / 4];
+	uint32_t acc0 = glb[0x84 / 4], acc1 = glb[0x88 / 4], acc2 = glb[0x8c / 4], acc3 = glb[0x90 / 4];
+	uint32_t sawid = saw[0x04 / 4], sawver = saw[0xfd0 / 4];
+	IOLog("OP2 BOOST: pre: PLL0 MODE=%08x L=%08x USER=%08x MUX=%08x ACC=%x/%x/%x/%x SAW ID=%08x VER=%08x\n",
+	    mode, l, user, mux, acc0, acc1, acc2, acc3, sawid, sawver);
+	if (!(mode & 0x80000000u) || l != 0x50 || !(user & 0x8u) ||
+	    ((mux >> 3) & 3) != 0 || ((mux >> 1) & 3) != 2) {
+		IOLog("OP2 BOOST: abort: clock tree not in the expected LK state\n");
+		return;
+	}
+	if ((acc0 | acc1 | acc2 | acc3) != 0) {
+		IOLog("OP2 BOOST: abort: mem-acc not at nominal/turbo setting\n");
+		return;
+	}
+	if (!((sawid >> 2) & 1) || (sawver >> 28) != 3) {
+		IOLog("OP2 BOOST: abort: SAW2 has no PMIC arbiter / unknown version\n");
+		return;
+	}
+
+	/* 1. VDD_MX up first (RPM wire value = corner - 1; SUPER_TURBO = 7). */
+	if (!op2_rpm_set_corner(OP2_RPM_RSC_SMPA, 2, 6)) {
+		IOLog("OP2 BOOST: abort: RPM did not ack VDD_MX super-turbo vote\n");
+		return;
+	}
+
+	/* 2. APC0 voltage: FTS2 range0, 5 mV/step from 0 V. */
+	const uint32_t vlevel = 1145000 / 5000;   /* 0xE5 = 1.145 V */
+	if (saw[0x08 / 4] == 0) {
+		saw[0x08 / 4] = 0x01;                 /* SAW2_CFG per DT (qcom,saw2-cfg) */
+	}
+	saw[0x18 / 4] = 1;                        /* RST: state machine to idle */
+	__asm__ volatile("dsb sy" ::: "memory");
+	saw[0x1c / 4] = vlevel;                   /* VCTL, port 0 */
+	__asm__ volatile("dsb sy" ::: "memory");
+	uint32_t sts = 0, waited = 0;
+	for (waited = 0; waited < 500; waited++) {
+		sts = saw[0x14 / 4];
+		if ((sts & 0xff) == vlevel) {
+			break;
+		}
+		IODelay(1);
+	}
+	if ((sts & 0xff) != vlevel) {
+		IOLog("OP2 BOOST: abort: PMIC_STS=%08x never confirmed vlevel 0x%x; clock unchanged\n",
+		    sts, vlevel);
+		return;
+	}
+	IODelay(300);                             /* slew 1.0 -> 1.145 V at ~2.4 mV/us, with margin */
+
+	/* 3. HF mux -> PLL0 full rate. */
+	uint32_t newmux = (mux & ~(3u << 3)) | (3u << 3);
+	glb[0x54 / 4] = newmux;
+	__asm__ volatile("dsb sy; isb" ::: "memory");
+	IODelay(10);
+	uint32_t mhz = op2_measure_cpu_mhz();
+	IOLog("OP2 BOOST: done: APC0 vlevel 0x%x (PMIC_STS %08x after %uus), MUX %08x -> %08x, cpu now ~%u MHz\n",
+	    vlevel, sts, waited, mux, glb[0x54 / 4], mhz);
+}
 
 bool
 AppleCLCD::start(IOService *provider)
@@ -290,6 +453,46 @@ AppleCLCD::start(IOService *provider)
 		return false;
 	}
 	op2_threaddump_start(); /* no-op unless op2_deadline is armed */
+	{
+		uint32_t mhz = op2_measure_cpu_mhz();
+		IOLog("OP2 CPU: effective clock ~%u MHz (A53 Fmax 1555; 0 = not measured)\n", mhz);
+	}
+	{
+		/* READ-ONLY dump of the A53 clock tree and APC0 voltage controller,
+		 * to plan the 767 -> 1555 MHz bring-up from real register values. */
+		volatile uint32_t *pll = (volatile uint32_t *)ml_io_map(0xf9015000, 0x1000); /* c0_pll */
+		volatile uint32_t *mux = (volatile uint32_t *)ml_io_map(0xf900d000, 0x1000); /* c0_mux (ALIAS0_GLB) */
+		volatile uint32_t *saw = (volatile uint32_t *)ml_io_map(0xf9065000, 0x1000); /* APC0 SAW2 */
+		if (pll != NULL) {
+			IOLog("OP2 CLK: PLL0 MODE=%08x L=%08x ALPHA=%08x USER=%08x CFG=%08x STAT=%08x TLO=%08x THI=%08x\n",
+			    pll[0x00 / 4], pll[0x04 / 4], pll[0x08 / 4], pll[0x10 / 4],
+			    pll[0x14 / 4], pll[0x1c / 4], pll[0x20 / 4], pll[0x24 / 4]);
+			IOLog("OP2 CLK: PLL1 MODE=%08x L=%08x ALPHA=%08x USER=%08x CFG=%08x STAT=%08x TLO=%08x THI=%08x\n",
+			    pll[0x40 / 4], pll[0x44 / 4], pll[0x48 / 4], pll[0x50 / 4],
+			    pll[0x54 / 4], pll[0x5c / 4], pll[0x60 / 4], pll[0x64 / 4]);
+		}
+		if (mux != NULL) {
+			IOLog("OP2 CLK: MUX 0x50=%08x 0x54=%08x 0x58=%08x DIAG=%08x\n",
+			    mux[0x50 / 4], mux[0x54 / 4], mux[0x58 / 4], mux[0x1c / 4]);
+		}
+		if (saw != NULL) {
+			IOLog("OP2 CLK: SAW2 ID=%08x CFG=%08x SPM_STS=%08x AVS_STS=%08x PMIC_STS=%08x VCTL=%08x AVS_CTL=%08x AVS_LIM=%08x\n",
+			    saw[0x04 / 4], saw[0x08 / 4], saw[0x0c / 4], saw[0x10 / 4],
+			    saw[0x14 / 4], saw[0x1c / 4], saw[0x20 / 4], saw[0x24 / 4]);
+			IOLog("OP2 CLK: SAW2 DATA0..7=%08x %08x %08x %08x %08x %08x %08x %08x VER=%08x\n",
+			    saw[0x40 / 4], saw[0x44 / 4], saw[0x48 / 4], saw[0x4c / 4],
+			    saw[0x50 / 4], saw[0x54 / 4], saw[0x58 / 4], saw[0x5c / 4], saw[0xfd0 / 4]);
+		}
+	}
+	{
+		/* Defer the boost: RPM SMD is still being brought up by OP2GPU at
+		 * this point (round 3 got "RPM did not ack" from that race), and
+		 * op2_rpm_request is not re-entrant. 20 s later it is idle. */
+		thread_t bth;
+		if (kernel_thread_start(op2_cpu_boost_thread, NULL, &bth) == KERN_SUCCESS) {
+			thread_deallocate(bth);
+		}
+	}
 	PE_current_console(&video);
 	fPhys = video.v_baseAddr;
 	fWidth = (uint32_t)video.v_width;
@@ -484,6 +687,46 @@ AppleCLCD::start(IOService *provider)
 	delay(20000); /* 20 ms to allow initial frame transfer to finish cleanly */
 	IOLog("OP2 FB: initial panel kickoff complete (kicks=%llu)\n", op2_fb_kick_count);
 
+	/* Immediate-present timer + swap completion (see presentPending). */
+	fPresentNow = IOTimerEventSource::timerEventSource(this, &AppleCLCD::presentNowFired);
+	if (fPresentNow != NULL && fWorkLoop->addEventSource(fPresentNow) != kIOReturnSuccess) {
+		fPresentNow->release();
+		fPresentNow = NULL;
+	}
+	{
+		uint32_t sw = 1;
+		PE_parse_boot_argn("op2fb_swapwait", &sw, sizeof(sw));
+		fSwapWaitEnabled = (sw != 0);
+	}
+
+	/* Second panel buffer from the LK-reserved carveout (slot 1). */
+	fBufPhys[0] = fPhys;
+	fBufPixels[0] = fPixels;
+	fFrontBuf = 0;
+	fDoubleBuffer = false;
+	{
+		uint32_t db = 1;
+		PE_parse_boot_argn("op2fb_double", &db, sizeof(db));
+		uint64_t bytes = ((uint64_t)fHeight * fRowBytes + 0xfffULL) & ~0xfffULL;
+		uint64_t back = (db != 0) ? op2_carveout_alloc_slot((uint32_t)bytes) : 0;
+		if (back != 0) {
+			fBufMem = IOMemoryDescriptor::withPhysicalAddress(back, bytes, kIODirectionInOut);
+			if (fBufMem != NULL) {
+				fBufMap = fBufMem->map(kIOMapWriteCombineCache);
+			}
+			if (fBufMap != NULL && fBufMap->getVirtualAddress() != 0) {
+				fBufPhys[1] = back;
+				fBufPixels[1] = (uintptr_t)fBufMap->getVirtualAddress();
+				memcpy((void *)fBufPixels[1], (const void *)fPixels, (size_t)fHeight * fRowBytes);
+				__asm__ volatile("dsb sy" ::: "memory");
+				fDoubleBuffer = true;
+			}
+		}
+		IOLog("OP2 FB: double buffering %s (buf0 0x%llx, buf1 0x%llx), swapwait %s\n",
+		    fDoubleBuffer ? "ON" : "off", fBufPhys[0], fBufPhys[1],
+		    fSwapWaitEnabled ? "on" : "off");
+	}
+
 	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
 	setProperty("external", false);
 	setProperty("DisplayPipePlaneBaseAlignment", 64ULL, 32);
@@ -589,20 +832,82 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
 		client->notify(OP2_FB_NOTIFY_VSYNC, values, 6);
 	}
 	bool flush = fb->fDirty && (count % fb->fFlushTicks) == 0;
-	uint8_t *rec = NULL;
+	IOLockUnlock(fb->fLock);
+	sender->setTimeoutUS(OP2_FB_VSYNC_US);
 	if (flush) {
+		fb->presentPending();   /* safety net; SwapEnd normally presents at once */
+	}
+}
+
+/* Minimum spacing between DSI kicks: a command-mode transfer must finish
+ * before the next START, or the START is lost and the panel keeps a stale
+ * frame. 15.6 ms at 19.2 MHz. Frames are deferred, never dropped. */
+#define OP2_FB_MIN_KICK_TICKS 300000ULL
+
+static uint64_t op2_fb_perf_n, op2_fb_perf_sum_us, op2_fb_perf_max_us;
+static uint64_t op2_fb_perf_deferred, op2_fb_swapwait_timeouts, op2_fb_swapwait_waits;
+
+void
+AppleCLCD::presentNowFired(OSObject *owner, __unused IOTimerEventSource *sender)
+{
+	((AppleCLCD *)owner)->presentPending();
+}
+
+/* Workloop context only (vsync timer or present-now timer). */
+void
+AppleCLCD::presentPending(void)
+{
+	uint64_t now = mach_absolute_time();
+	if (op2_fb_last_kick != 0 && (now - op2_fb_last_kick) < OP2_FB_MIN_KICK_TICKS) {
+		uint64_t wait_ticks = OP2_FB_MIN_KICK_TICKS - (now - op2_fb_last_kick);
+		op2_fb_perf_deferred++;
+		if (fPresentNow != NULL) {
+			fPresentNow->setTimeoutUS((uint32_t)(wait_ticks * 10 / 192) + 50);
+		}
+		return;
+	}
+
+	uint8_t *rec = NULL;
+	IOLockLock(fLock);
+	if (fDirty) {
 		rec = (uint8_t *)IOMallocData(OP2_FB_SWAP_REC_SIZE);
 		if (rec != NULL) {
-			memcpy(rec, fb->fPending, OP2_FB_SWAP_REC_SIZE);
-			fb->fDirty = false;
+			memcpy(rec, fPending, OP2_FB_SWAP_REC_SIZE);
+			fDirty = false;
 		}
 	}
-	IOLockUnlock(fb->fLock);
-	if (rec != NULL) {
-		fb->present(rec);
-		IOFreeData(rec, OP2_FB_SWAP_REC_SIZE);
+	IOLockUnlock(fLock);
+	if (rec == NULL) {
+		return;
 	}
-	sender->setTimeoutUS(OP2_FB_VSYNC_US);
+
+	uint32_t swapID = 0;
+	memcpy(&swapID, rec + 0x40, 4);
+	uint64_t t0 = mach_absolute_time();
+	present(rec);
+	uint64_t us = ((mach_absolute_time() - t0) * 10) / 192;
+	IOFreeData(rec, OP2_FB_SWAP_REC_SIZE);
+
+	IOLockLock(fLock);
+	if ((int32_t)(swapID - fCompletedSwapID) > 0) {
+		fCompletedSwapID = swapID;
+	}
+	IOLockWakeup(fLock, &fCompletedSwapID, false);
+	IOLockUnlock(fLock);
+
+	op2_fb_perf_n++;
+	op2_fb_perf_sum_us += us;
+	if (us > op2_fb_perf_max_us) {
+		op2_fb_perf_max_us = us;
+	}
+	if ((op2_fb_perf_n % 600) == 0) {
+		IOLog("OP2 FB PERF: presents=%llu avg=%lluus max=%lluus deferred=%llu swapwait waits=%llu timeouts=%llu dbl=%d\n",
+		    op2_fb_perf_n, op2_fb_perf_sum_us / 600, op2_fb_perf_max_us,
+		    op2_fb_perf_deferred, op2_fb_swapwait_waits, op2_fb_swapwait_timeouts,
+		    (int)fDoubleBuffer);
+		op2_fb_perf_sum_us = 0;
+		op2_fb_perf_max_us = 0;
+	}
 }
 
 void
@@ -666,6 +971,7 @@ op2_fb_sample_nz(OP2Surface *s, uint32_t cap)
 
 static uint64_t op2_fb_swap_count;
 static uint64_t op2_fb_present_no_target;
+static uint64_t op2_fb_direct_cur;   /* pipe SRC0 set by direct scanout, 0 = copy mode */
 
 /*
  * Swap records the latest frame submitted by userland (IOMobileFramebufferSwapEnd).
@@ -683,7 +989,11 @@ AppleCLCD::swap(const uint8_t *rec)
 	IOLockLock(fLock);
 	memcpy(fPending, rec, OP2_FB_SWAP_REC_SIZE);
 	fDirty = true;
+	fLastSwapEndID = get32(rec, 0x40);
 	IOLockUnlock(fLock);
+	if (fPresentNow != NULL && fFlushTicks <= 1) {
+		fPresentNow->setTimeoutUS(1);
+	}
 }
 
 /*
@@ -793,9 +1103,14 @@ AppleCLCD::present(const uint8_t *rec)
 	}
 
 	if (target_id != sLastPresentedID) {
+		/* The render server double-buffers, so this flips every frame:
+		 * log only the first few (IOLog per frame cost real CPU). */
+		static uint32_t sSwitchLogged = 0;
 		sLastPresentedID = target_id;
-		IOLog("OP2 FB: *** DISPLAY SWITCHED TO SURFACE %u (%ux%u) ***\n",
-		    target_id, s->width, s->height);
+		if (++sSwitchLogged <= 6) {
+			IOLog("OP2 FB: *** DISPLAY SWITCHED TO SURFACE %u (%ux%u) ***\n",
+			    target_id, s->width, s->height);
+		}
 	}
 
 	if (!fUserlandTookOver && target_id >= 2) {
@@ -846,10 +1161,13 @@ AppleCLCD::present(const uint8_t *rec)
 	}
 	static uint32_t sLastShown = 0;
 	if (shown_id != sLastShown) {
+		static uint32_t sShownLogged = 0;
 		sLastShown = shown_id;
 		op2_fb_last_shown = shown_id;
-		IOLog("OP2 FB: now showing surface %u (swap target %u)\n",
-		    shown_id, target_id);
+		if (++sShownLogged <= 6 || shown_id != target_id) {
+			IOLog("OP2 FB: now showing surface %u (swap target %u)\n",
+			    shown_id, target_id);
+		}
 	}
 
 	uint32_t shown_nz = op2_fb_sample_nz(s, 5000);
@@ -896,9 +1214,8 @@ AppleCLCD::present(const uint8_t *rec)
 		 * Surface is physically contiguous in hardware DMA memory.
 		 * Point MDP5 hardware pipe directly to the surface's physical address.
 		 */
-		static uint64_t s_last_direct_phys = 0;
-		if (direct_phys != s_last_direct_phys) {
-			s_last_direct_phys = direct_phys;
+		if (direct_phys != op2_fb_direct_cur) {
+			op2_fb_direct_cur = direct_phys;
 			fActivePipe[0x14 / 4] = (uint32_t)direct_phys;
 			fActivePipe[0x24 / 4] = s->bytesPerRow;
 			fActivePipe[0x00 / 4] = (s->height << 16) | s->width;
@@ -912,19 +1229,20 @@ AppleCLCD::present(const uint8_t *rec)
 			}
 		}
 	} else {
-		/* Fallback: fast 32bpp memory copy / downsample into fPixels at fPhys */
-		if (fActivePipe != NULL && fActivePipe[0x14 / 4] != (uint32_t)fPhys) {
-			fActivePipe[0x14 / 4] = (uint32_t)fPhys;
-			fActivePipe[0x24 / 4] = fRowBytes;
-			fActivePipe[0x00 / 4] = (fHeight << 16) | fWidth;
-			fActivePipe[0x04 / 4] = (fHeight << 16) | fWidth;
-			fActivePipe[0x30 / 4] = 0x000236ffu;
-			fActivePipe[0x34 / 4] = 0x03020001u;
-		}
+		/*
+		 * Copy / downsample path. Full-screen frames go to the back
+		 * buffer (the one the panel is not reading) and are flipped in
+		 * after the copy; partial frames update the front buffer as before.
+		 */
+		bool fullFrame = (s->width == 1242 && s->height == 2208) ||
+		    (s->width >= fWidth && s->height >= fHeight);
+		uint32_t dstIdx = (fDoubleBuffer && fullFrame) ? (fFrontBuf ^ 1) : fFrontBuf;
+		uintptr_t dstPixels = fBufPixels[dstIdx] != 0 ? fBufPixels[dstIdx] : fPixels;
+		uint64_t dstPhys = fBufPhys[dstIdx] != 0 ? fBufPhys[dstIdx] : fPhys;
 
 		uintptr_t src = s->kernelAddress();
 		uint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;
-		if (src != 0 && bpe == 4 && fPixels != 0) {
+		if (src != 0 && bpe == 4 && dstPixels != 0) {
 			if (s->width == 1242 && s->height == 2208) {
 				static uint32_t sy_map[1920];
 				static bool maps_ready = false;
@@ -940,7 +1258,7 @@ AppleCLCD::present(const uint8_t *rec)
 					for (int32_t y = 0; y < (int32_t)fHeight; y++) {
 						uint32_t sy_coord = sy_map[y];
 						const uint32_t *src_row = (const uint32_t *)(src + s->offset + (uint64_t)sy_coord * s->bytesPerRow);
-						uint32_t *dst_row = (uint32_t *)(fPixels + (uint64_t)y * fRowBytes);
+						uint32_t *dst_row = (uint32_t *)(dstPixels + (uint64_t)y * fRowBytes);
 
 						/*
 						 * High-Speed 20-pixel Block Downsampler (1242 -> 1080):
@@ -997,12 +1315,28 @@ AppleCLCD::present(const uint8_t *rec)
 					uint32_t line_bytes = (uint32_t)w * 4;
 					for (int32_t y = 0; y < h; y++) {
 						const void *src_line = (const void *)(src + s->offset + (uint64_t)y * s->bytesPerRow);
-						void *dst_line = (void *)(fPixels + (uint64_t)y * fRowBytes);
+						void *dst_line = (void *)(dstPixels + (uint64_t)y * fRowBytes);
 						memcpy(dst_line, src_line, line_bytes);
 					}
 				}
 			}
 		}
+
+		/* Flip: make the freshly written buffer the scanout source. The
+		 * FLUSH in op2_fb_kick_panel latches SRC0 before START. */
+		__asm__ volatile("dsb sy" ::: "memory");
+		if (fActivePipe != NULL &&
+		    (op2_fb_direct_cur != 0 || fActivePipe[0x14 / 4] != (uint32_t)dstPhys)) {
+			fActivePipe[0x14 / 4] = (uint32_t)dstPhys;
+			fActivePipe[0x24 / 4] = fRowBytes;
+			fActivePipe[0x00 / 4] = (fHeight << 16) | fWidth;
+			fActivePipe[0x04 / 4] = (fHeight << 16) | fWidth;
+			fActivePipe[0x30 / 4] = 0x000236ffu;
+			fActivePipe[0x34 / 4] = 0x03020001u;
+		}
+		op2_fb_direct_cur = 0;
+		fFrontBuf = dstIdx;
+		fPixels = dstPixels;
 	}
 
 	if (s != fSurface) {
@@ -1281,7 +1615,40 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
 			}
 		}
 		break;
-	case kOP2FBSwapWait:
+	case kOP2FBSwapWait: {
+		/* (swap token, timeout, flags): block until the frame for this
+		 * token has been copied out of the render server's buffer, so it
+		 * cannot start drawing into memory we are still reading. */
+		uint64_t want = args->scalarInputCount >= 1 ? args->scalarInput[0] : 0;
+		static uint32_t sWaitLogged = 0;
+		if (sWaitLogged < 6) {
+			sWaitLogged++;
+			IOLog("OP2 FB: SwapWait(%llu, %llu, %llu) ended=%u done=%u\n", want,
+			    args->scalarInputCount >= 2 ? args->scalarInput[1] : 0,
+			    args->scalarInputCount >= 3 ? args->scalarInput[2] : 0,
+			    fFB->fLastSwapEndID, fFB->fCompletedSwapID);
+		}
+		if (!fFB->fSwapWaitEnabled || want == 0) {
+			break;
+		}
+		uint32_t w = (uint32_t)want;
+		IOLockLock(fFB->fLock);
+		int32_t ahead = (int32_t)(fFB->fLastSwapEndID - w);
+		if (ahead >= 0 && ahead < 16 && (int32_t)(w - fFB->fCompletedSwapID) > 0) {
+			uint64_t deadline = 0;
+			clock_interval_to_deadline(50, kMillisecondScale, &deadline);
+			op2_fb_swapwait_waits++;
+			while ((int32_t)(w - fFB->fCompletedSwapID) > 0) {
+				if (IOLockSleepDeadline(fFB->fLock, &fFB->fCompletedSwapID,
+				    deadline, THREAD_UNINT) == THREAD_TIMED_OUT) {
+					op2_fb_swapwait_timeouts++;
+					break;
+				}
+			}
+		}
+		IOLockUnlock(fFB->fLock);
+		break;
+	}
 	default:
 		break;
 	}

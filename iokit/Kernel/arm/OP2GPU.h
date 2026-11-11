@@ -59,6 +59,25 @@
 #define A4XX_RBBM_INT_0_STATUS          0x17d
 #define A4XX_RBBM_AHB_ERROR_STATUS      0x18f
 #define A4XX_CP_ME_STATUS               0x4d1
+#define A4XX_CP_HW_FAULT                0x4d8
+#define A4XX_CP_PROTECT_STATUS          0x4da
+#define A4XX_RBBM_SP_HYST_CNT           0x021
+#define A4XX_RBBM_AHB_CMD               0x025
+#define A4XX_RBBM_INTERFACE_HANG_INT_CTL 0x02f
+#define A4XX_RBBM_INT_CLEAR_CMD         0x036
+#define A4XX_RBBM_INT_0_MASK            0x037
+#define A4XX_RBBM_POWER_CNTL_IP         0x098
+#define A4XX_RBBM_SP_REGFILE_SLEEP_CNTL_0 0x099
+#define A4XX_RBBM_SP_REGFILE_SLEEP_CNTL_1 0x09a
+#define A4XX_RBBM_PERFCTR_RBBM_0_LO     0x0ac
+#define A4XX_RBBM_PERFCTR_RBBM_0_HI     0x0ad
+#define A4XX_RBBM_ALWAYSON_COUNTER_LO   0x16e
+#define A4XX_RBBM_ALWAYSON_COUNTER_HI   0x16f
+#define A4XX_RBBM_PERFCTR_RBBM_SEL_0    0x176
+#define A4XX_SP_TP_PWR_ON               (1U << 20)
+
+/* GPU SMMU (kgsl_iommu @ 0xfdb10000) = Adreno base + 0x10000 bytes */
+#define OP2_GPU_SMMU_OFFSET             0x10000U
 
 /* VBIF Registers (Word Offsets) */
 #define A4XX_VBIF_GATE_OFF_WRREQ_EN     0x302a
@@ -70,9 +89,9 @@
 #define A4XX_VBIF_XIN_HALT_CTRL0        0x3080
 #define A4XX_VBIF_XIN_HALT_CTRL1        0x3081
 
-#define A4XX_UCHE_CACHE_WAYS_VFD        0x384
-#define A4XX_UCHE_TRAP_BASE_LO          0x386
-#define A4XX_UCHE_TRAP_BASE_HI          0x387
+#define A4XX_UCHE_CACHE_WAYS_VFD        0xe8c
+#define A4XX_UCHE_TRAP_BASE_LO          0xe83
+#define A4XX_UCHE_TRAP_BASE_HI          0xe84
 
 #define A4XX_RB_GMEM_BASE_ADDR          0xcc0
 
@@ -102,6 +121,15 @@
 #define CP_INDIRECT_BUFFER_PFE          0x3f
 #define CP_BOOTSTRAP_UCODE              0x6f
 #define CP_EVENT_WRITE                  0x46
+#define CP_WAIT_REG_MEM                 0x3c
+#define CACHE_FLUSH_TS                  4
+
+/* RPM: GPU core clock is owned by the RPM on MSM8994 (clk2 id 1, KHz).
+ * The RPM scales VDD_GFX itself from this vote (Linux never raises the corner). */
+#define OP2_RPM_GFX3D_CLK_ID            1U
+
+/* Fence modes, chosen by the boot probe */
+enum { kOP2FenceEvent = 0, kOP2FenceMemWrite = 1, kOP2FenceRptr = 2 };
 
 /* Ringbuffer Configuration */
 #define OP2_GPU_RB_SIZE                 (32 * 1024)     /* 32 KB */
@@ -123,6 +151,7 @@ enum {
 	kMsmSubmitQueueNew      = 0x4a,
 	kMsmSubmitQueueClose    = 0x4b,
 	kMsmSubmitQueueQuery    = 0x4c,
+	kOP2Log                 = 0x7c,
 	kOP2UserMemory          = 0x7d,
 	kOP2Surface             = 0x7e,
 	kOP2Show                = 0x7f,
@@ -225,6 +254,35 @@ private:
 	uint32_t   *fStatusPageVirt;
 	uint64_t    fStatusPagePhys;
 	uint32_t    fFenceSeq;
+	uint32_t    fFenceMode;
+	uint32_t    fHangs;
+	uint32_t    fSubmits;
+	uint32_t    fCoreMHz;
+
+	/* GPU SMMU (CB0, SID 0 = gfx3d_user) identity translation (IOVA = physical), 4 KB pages:
+	 * only the pages of live buffers are mapped; anything else is a translation fault. */
+	uint32_t   *fPageTableVirt;     /* first level: 4096 x 4 B, 16 KB aligned */
+	uint64_t    fPageTablePhys;
+	uint32_t  **fL2Virt;            /* 4096 pointers: second-level table (256 x 4 B) per 1 MB, or NULL */
+	uint8_t   **fL2Ref;             /* 4096 pointers: per-page refcount (256 B) per 1 MB, or NULL */
+	uint32_t    fL2Used;           /* L2 tables handed out */
+	uint32_t    fPagesMapped;
+	IOLock     *fMapLock;           /* page-table edits (several user clients) */
+	bool        fXlate;             /* translation enabled */
+
+	/* SMMU faults (CB0 FSR/FAR), polled while fences are awaited */
+	struct op2_smmu_fault {
+		uint32_t far;
+		uint32_t fsr;
+		uint32_t fsynr0;
+		uint32_t fence;          /* last retired fence when seen */
+	};
+	enum { kOP2FaultLog = 16 };
+	struct op2_smmu_fault fFaults[kOP2FaultLog];
+	uint32_t    fFaultCount;        /* every FSR latch seen (one latch may stand for many accesses) */
+	uint32_t    fFaultMulti;        /* latches with FSR.MULTI */
+	uint32_t    fFaultWrites;
+	uint32_t    fFaultMin, fFaultMax;
 
 	bool        fEnabled;
 	bool        fHardwareInitialized;
@@ -242,9 +300,37 @@ private:
 
 	bool        initAdrenoRegisters(void);
 	bool        bootstrapMicrocode(void);
-	bool        initRingBuffer(void);
+	bool        allocRingBuffer(void);
+	void        programRingBuffer(void);
+	bool        meInit(void);
+	bool        hwStart(void);
 	bool        submitPacket(const uint32_t *words, uint32_t count);
-	bool        waitRPTR(uint32_t target_rptr, uint32_t timeout_us);
+	bool        waitIdle(uint32_t timeout_us);
+	uint32_t    ringFree(void);
+	void        dumpState(const char *why);
+	uint32_t    measureCoreMHz(void);
+	void        voteCoreClock(uint32_t khz);
+	void        probeSMMU(void);
+	bool        restoreSMMUSecureConfig(void);
+	void        writeCB(uint32_t off, uint32_t val);
+	uint32_t    readCB(uint32_t off);
+	void        tlbInvalidateAll(void);
+	bool        enableTranslation(void);
+	bool        programCB0(void);
+	uint32_t   *l2For(uint32_t section, bool create);
+	void        mapRange(uint64_t phys, uint64_t bytes);
+	void        unmapRange(uint64_t phys, uint64_t bytes);
+	void        mapDescriptor(IOMemoryDescriptor *md, uint64_t bytes, bool map);
+	bool        isMapped(uint64_t phys);
+	uint32_t    pollSMMUFault(void);
+	uint32_t    checkSMMUFault(const char *where);
+	void        selfTestSMMU(void);
+	void        probeFences(void);
+	void        selfTest(uint32_t count);
+	void        selfTestG1(void);
+	bool        runIB(uint32_t *ib, uint64_t ib_phys, uint32_t words, uint32_t timeout_ms, uint64_t *us_out);
+	uint32_t    emitFence(uint32_t *cmds, uint32_t fence);
+	uint32_t    readFenceMem(void);
 
 public:
 	virtual bool init(OSDictionary *dictionary = NULL) APPLE_KEXT_OVERRIDE;
@@ -258,6 +344,7 @@ public:
 	    UInt32 type, IOUserClient **handler) APPLE_KEXT_OVERRIDE;
 
 	bool submitIndirectBuffer(uint64_t phys_addr, uint32_t words, uint32_t *out_fence);
+	bool recover(const char *why);
 	bool waitForFence(uint32_t fence, uint32_t timeout_ms);
 	bool isFenceDone(uint32_t fence);
 	bool isHardwareReady(void) const { return fHardwareInitialized; }
@@ -273,6 +360,8 @@ struct op2_gpu_client_buffer {
 	uint32_t                  flags;
 	uint32_t                  fence;
 	bool                      in_use;
+	bool                      owned;       /* allocated by gemNew (not an IOSurface's memory) */
+	uint64_t                  alloc_size;  /* size plus the guard band after it */
 };
 
 class OP2GPUUserClient : public IOUserClient {
@@ -284,14 +373,17 @@ private:
 	IOLock                  *fLock;
 	op2_gpu_client_buffer    fBuffers[OP2_GPU_MAX_BUFFERS];
 	uint32_t                 fBufferCount;
+	uint32_t                 fFaultsSeen;   /* fOwner->fFaultCount already described against our buffers */
 
 	struct op2_gpu_client_buffer *getBuffer(uint32_t handle);
+	void describeFaults(const char *where);
 	IOReturn gemNew(struct msm_gem_new *req);
 	IOReturn gemInfo(struct msm_gem_info *req);
 	IOReturn gemCpuPrep(struct msm_gem_cpu_prep *req);
 	IOReturn gemCpuFini(uint32_t handle);
 	IOReturn gemSubmit(struct msm_gem_submit *req);
 	IOReturn gemClose(uint32_t handle);
+	void releaseBuffer(struct op2_gpu_client_buffer *b, uint32_t handle);
 	IOReturn waitFence(struct msm_wait_fence *req);
 
 public:
