@@ -5280,8 +5280,8 @@ restart:
 			lck_mtx_unlock(&req->r_mtx);
 			continue;
 		}
-		NFS_SOCK_DBG("nfs timer mark resend: p %d x 0x%llx f 0x%x rtt %d\n",
-		    req->r_procnum, req->r_xid, req->r_flags, req->r_rtt);
+		NFS_SOCK_DBG("nfs timer mark resend: p %u x 0x%llx f 0x%x rtt %d\n",
+		    req->r_procnum, req->r_xid, (unsigned int)req->r_flags, req->r_rtt);
 		req->r_flags |= R_MUSTRESEND;
 		req->r_rtt = -1;
 		wakeup(req);
@@ -5889,7 +5889,7 @@ nfs_is_squishy(struct nfsmount *nmp)
 	}
 
 	timeo =  (nmp->nm_deadtimeout > timeo) ? max(nmp->nm_deadtimeout / 8, timeo) : timeo;
-	NFS_SOCK_DBG("nm_writers = %d  nm_mappers = %d timeo = %d\n", nmp->nm_writers, nmp->nm_mappers, timeo);
+	NFS_SOCK_DBG("nm_writers = %u  nm_mappers = %u timeo = %d\n", nmp->nm_writers, nmp->nm_mappers, timeo);
 
 	if (nmp->nm_writers == 0 && nmp->nm_mappers == 0) {
 		uint64_t flags = mp ? vfs_flags(mp) : 0;
