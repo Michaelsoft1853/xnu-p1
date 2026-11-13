@@ -1851,7 +1851,7 @@ __mac_syscall(proc_t p, struct __mac_syscall_args *uap, int *retv __unused)
 
 	if (error == ENOPOLICY) {
 		printf("mac_syscall: policy '%s' not registered (call=0x%x from pid %d)\n",
-		       target, uap->call, p ? p->p_pid : -1);
+		       target, (unsigned int)uap->call, p ? p->p_pid : -1);
 	}
 
 done:
