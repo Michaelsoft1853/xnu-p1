@@ -3249,6 +3249,8 @@ nfs_lock_owner_find(nfsnode_t np, proc_t p, int alloc)
 tryagain:
 	lck_mtx_lock(&np->n_openlock);
 	TAILQ_FOREACH(nlop, &np->n_lock_owners, nlo_link) {
+		os_ref_count_t newcount __unused;
+
 		if (nlop->nlo_pid != pid) {
 			continue;
 		}
@@ -3259,7 +3261,7 @@ tryagain:
 		if (os_ref_get_count(&nlop->nlo_refcnt)) {
 			TAILQ_REMOVE(&np->n_lock_owners, nlop, nlo_link);
 			nlop->nlo_flags &= ~NFS_LOCK_OWNER_LINK;
-			os_ref_release_locked(&nlop->nlo_refcnt);
+			newcount = os_ref_release_locked(&nlop->nlo_refcnt);
 			lck_mtx_unlock(&np->n_openlock);
 			goto tryagain;
 		}
