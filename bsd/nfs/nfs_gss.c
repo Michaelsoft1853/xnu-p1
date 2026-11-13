@@ -1924,7 +1924,7 @@ nfs_gss_clnt_gssd_upcall(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp, uint32
 		}
 	}
 
-	NFS_GSS_DBG("Retrycnt = %d nm_etype.count = %d\n", retrycnt, nmp->nm_etype.count);
+	NFS_GSS_DBG("Retrycnt = %u nm_etype.count = %u\n", retrycnt, nmp->nm_etype.count);
 	if (retrycnt >= nmp->nm_etype.count) {
 		return EACCES;
 	}
@@ -1953,7 +1953,7 @@ nfs_gss_clnt_gssd_upcall(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp, uint32
 	}
 	etype.count = etype.count - retrycnt;
 
-	NFS_GSS_DBG("etype count = %d preferred etype = %d\n", etype.count, etype.etypes[0]);
+	NFS_GSS_DBG("etype count = %u preferred etype = %u\n", etype.count, etype.etypes[0]);
 
 	/*
 	 * NFS currently only supports default principals or
@@ -2030,7 +2030,7 @@ retry:
 	}
 
 	if (kr != KERN_SUCCESS) {
-		printf("nfs_gss_clnt_gssd_upcall: mach_gss_init_sec_context failed: %x (%d)\n", kr, kr);
+		printf("nfs_gss_clnt_gssd_upcall: mach_gss_init_sec_context failed: %x (%d)\n", (unsigned int)kr, kr);
 		if (kr == MIG_SERVER_DIED && cp->gss_clnt_cred_handle == 0 &&
 		    retry_cnt++ < NFS_GSS_MACH_MAX_RETRIES &&
 		    !vfs_isforce(nmp->nm_mountp) && (nmp->nm_state & (NFSSTA_FORCE | NFSSTA_DEAD)) == 0) {
@@ -2084,7 +2084,7 @@ skip:
 
 	if (lucidlen > 0) {
 		if (lucidlen > MAX_LUCIDLEN) {
-			printf("nfs_gss_clnt_gssd_upcall: bad context length (%d)\n", lucidlen);
+			printf("nfs_gss_clnt_gssd_upcall: bad context length (%u)\n", lucidlen);
 			vm_map_copy_discard((vm_map_copy_t) octx);
 			vm_map_copy_discard((vm_map_copy_t) otoken);
 			goto out;
@@ -2123,7 +2123,7 @@ skip:
 		/* Set context token to gss output token */
 		MALLOC(cp->gss_clnt_token, u_char *, otokenlen, M_TEMP, M_WAITOK);
 		if (cp->gss_clnt_token == NULL) {
-			printf("nfs_gss_clnt_gssd_upcall: could not allocate %d bytes\n", otokenlen);
+			printf("nfs_gss_clnt_gssd_upcall: could not allocate %u bytes\n", otokenlen);
 			vm_map_copy_discard((vm_map_copy_t) otoken);
 			return ENOMEM;
 		}
@@ -2139,9 +2139,9 @@ skip:
 
 	if (selected != (uint32_t)-1) {
 		nmp->nm_etype.selected = selected;
-		NFS_GSS_DBG("etype selected = %d\n", nmp->nm_etype.etypes[selected]);
+		NFS_GSS_DBG("etype selected = %u\n", nmp->nm_etype.etypes[selected]);
 	}
-	NFS_GSS_DBG("Up call succeeded major = %d\n", cp->gss_clnt_major);
+	NFS_GSS_DBG("Up call succeeded major = %u\n", cp->gss_clnt_major);
 	return 0;
 
 out:
@@ -2321,7 +2321,7 @@ nfs_gss_clnt_ctx_neg_cache_reap(struct nfsmount *nmp)
 	/* Try and reap old, unreferenced, expired contexts */
 	microuptime(&now);
 
-	NFS_GSS_DBG("Reaping contexts ncentries = %d\n", nmp->nm_ncentries);
+	NFS_GSS_DBG("Reaping contexts ncentries = %u\n", nmp->nm_ncentries);
 
 	TAILQ_FOREACH_SAFE(cp, &nmp->nm_gsscl, gss_clnt_entries, tcp) {
 		int destroy = 0;
@@ -2353,7 +2353,7 @@ nfs_gss_clnt_ctx_neg_cache_reap(struct nfsmount *nmp)
 			nfs_gss_clnt_ctx_destroy(cp);
 		}
 	}
-	NFS_GSS_DBG("Reaped %d contexts ncentries = %d\n", reaped, nmp->nm_ncentries);
+	NFS_GSS_DBG("Reaped %d contexts ncentries = %u\n", reaped, nmp->nm_ncentries);
 }
 
 /*
@@ -2469,7 +2469,7 @@ nfs_gss_clnt_ctx_copy(struct nfs_gss_clnt_ctx *scp, struct nfs_gss_clnt_ctx **dc
 static void
 nfs_gss_clnt_ctx_destroy(struct nfs_gss_clnt_ctx *cp)
 {
-	NFS_GSS_DBG("Destroying context %d/%d\n",
+	NFS_GSS_DBG("Destroying context %d/%u\n",
 	    kauth_cred_getasid(cp->gss_clnt_cred),
 	    kauth_cred_getauid(cp->gss_clnt_cred));
 
@@ -2664,7 +2664,7 @@ nfs_gss_clnt_ctx_remove(struct nfsmount *nmp, kauth_cred_t cred)
 		lck_mtx_lock(cp->gss_clnt_mtx);
 		if (nfs_gss_clnt_ctx_cred_match(cp->gss_clnt_cred, cred)) {
 			if (cp->gss_clnt_flags & GSS_CTX_DESTROY) {
-				NFS_GSS_DBG("Found destroyed context %d/%d. refcnt = %d continuing\n",
+				NFS_GSS_DBG("Found destroyed context %d/%u. refcnt = %d continuing\n",
 				    kauth_cred_getasid(cp->gss_clnt_cred),
 				    kauth_cred_getauid(cp->gss_clnt_cred),
 				    cp->gss_clnt_refcnt);
@@ -2680,7 +2680,7 @@ nfs_gss_clnt_ctx_remove(struct nfsmount *nmp, kauth_cred_t cred)
 			 * Drop the reference to remove it if its
 			 * refcount is zero.
 			 */
-			NFS_GSS_DBG("Removed context %d/%d refcnt = %d\n",
+			NFS_GSS_DBG("Removed context %d/%u refcnt = %d\n",
 			    kauth_cred_getasid(cp->gss_clnt_cred),
 			    kauth_cred_getuid(cp->gss_clnt_cred),
 			    cp->gss_clnt_refcnt);
@@ -2775,7 +2775,7 @@ out:
 	if (cp == NULL) {
 		lck_mtx_unlock(&nmp->nm_lock);
 		p->flags |= NFS_IOC_NO_CRED_FLAG;  /* No credentials, valid or invalid on this mount */
-		NFS_GSS_DBG("No context found for session %d by uid %d\n",
+		NFS_GSS_DBG("No context found for session %d by uid %u\n",
 		    kauth_cred_getasid(cred), kauth_cred_getuid(cred));
 		return 0;
 	}
@@ -2956,7 +2956,7 @@ nfs_gss_svc_ctx_timer(__unused void *param1, __unused void *param2)
 				 * A stale context - remove it
 				 */
 				LIST_REMOVE(cp, gss_svc_entries);
-				NFS_GSS_DBG("Removing contex for %d\n", cp->gss_svc_uid);
+				NFS_GSS_DBG("Removing contex for %u\n", cp->gss_svc_uid);
 				if (cp->gss_svc_seqbits) {
 					FREE(cp->gss_svc_seqbits, M_TEMP);
 				}
@@ -3276,7 +3276,7 @@ nfs_gss_svc_cred_get(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 			 */
 			nfsm_chain_get_32(error, nmc, seqnum);
 			if (seqnum != nd->nd_gss_seqnum) {
-				printf("%s: Sequence number mismatch seqnum = %d nd->nd_gss_seqnum = %d\n",
+				printf("%s: Sequence number mismatch seqnum = %u nd->nd_gss_seqnum = %u\n",
 				    __func__, seqnum, nd->nd_gss_seqnum);
 				printmbuf("reply_mbuf", nmc->nmc_mhead, 0, 0);
 				printf("reply_mbuf %p nmc_head %p\n", reply_mbuf, nmc->nmc_mhead);
@@ -3627,7 +3627,7 @@ nfs_gss_svc_gssd_upcall(struct nfs_gss_svc_ctx *cp)
 
 	kr = host_get_gssd_port(host_priv_self(), &mp);
 	if (kr != KERN_SUCCESS) {
-		printf("nfs_gss_svc_gssd_upcall: can't get gssd port, status %x (%d)\n", kr, kr);
+		printf("nfs_gss_svc_gssd_upcall: can't get gssd port, status %x (%d)\n", (unsigned int)kr, kr);
 		goto out;
 	}
 	if (!IPC_PORT_VALID(mp)) {
