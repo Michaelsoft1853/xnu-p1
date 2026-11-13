@@ -436,7 +436,7 @@ krpc_call(
 				if (!error && readlen < aio.iov_len) {
 					/* only log a message if we got a partial word */
 					if (readlen != 0) {
-						printf("short receive (%ld/%ld) from server " IP_FORMAT "\n",
+						printf("short receive (%zu/%zu) from server " IP_FORMAT "\n",
 						    readlen, sizeof(u_int32_t), IP_LIST(&(sin->sin_addr.s_addr)));
 					}
 					error = EPIPE;
@@ -450,7 +450,7 @@ krpc_call(
 				 * and forcing a disconnect/reconnect is all I can do.
 				 */
 				if (len > maxpacket) {
-					printf("impossible packet length (%ld) from server " IP_FORMAT "\n",
+					printf("impossible packet length (%zu) from server " IP_FORMAT "\n",
 					    len, IP_LIST(&(sin->sin_addr.s_addr)));
 					error = EFBIG;
 					goto out;
@@ -462,7 +462,7 @@ krpc_call(
 				} while (error == EWOULDBLOCK);
 
 				if (!error && (len > readlen)) {
-					printf("short receive (%ld/%ld) from server " IP_FORMAT "\n",
+					printf("short receive (%zu/%zu) from server " IP_FORMAT "\n",
 					    readlen, len, IP_LIST(&(sin->sin_addr.s_addr)));
 					error = EPIPE;
 				}
