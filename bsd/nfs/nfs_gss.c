@@ -3659,7 +3659,7 @@ retry:
 
 	printf("mach_gss_accept_sec_context returned %d\n", kr);
 	if (kr != KERN_SUCCESS) {
-		printf("nfs_gss_svc_gssd_upcall failed: %x (%d)\n", kr, kr);
+		printf("nfs_gss_svc_gssd_upcall failed: %x (%d)\n", (unsigned int)kr, kr);
 		if (kr == MIG_SERVER_DIED && cp->gss_svc_context == 0 &&
 		    retry_cnt++ < NFS_GSS_MACH_MAX_RETRIES) {
 			if (cp->gss_svc_tokenlen > 0) {
@@ -3675,7 +3675,7 @@ retry:
 
 	if (lucidlen > 0) {
 		if (lucidlen > MAX_LUCIDLEN) {
-			printf("nfs_gss_svc_gssd_upcall: bad context length (%d)\n", lucidlen);
+			printf("nfs_gss_svc_gssd_upcall: bad context length (%u)\n", lucidlen);
 			vm_map_copy_discard((vm_map_copy_t) octx);
 			vm_map_copy_discard((vm_map_copy_t) otoken);
 			goto out;
@@ -3708,7 +3708,7 @@ retry:
 		/* Set context token to gss output token */
 		MALLOC(cp->gss_svc_token, u_char *, otokenlen, M_TEMP, M_WAITOK);
 		if (cp->gss_svc_token == NULL) {
-			printf("nfs_gss_svc_gssd_upcall: could not allocate %d bytes\n", otokenlen);
+			printf("nfs_gss_svc_gssd_upcall: could not allocate %u bytes\n", otokenlen);
 			vm_map_copy_discard((vm_map_copy_t) otoken);
 			return ENOMEM;
 		}
