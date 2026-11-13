@@ -572,12 +572,12 @@ nfs_socket_create(
 	}
 
 	if (error) {
-		NFS_SOCK_DBG("nfs connect %s error %d creating socket %p %s type %d%s port %d prot %d %d\n",
+		NFS_SOCK_DBG("nfs connect %s error %d creating socket %p %s type %d%s port %d prot %u %u\n",
 		    vfs_statfs(nmp->nm_mountp)->f_mntfromname, error, nso, naddr, sotype,
 		    resvport ? "r" : "", port, protocol, vers);
 		nfs_socket_destroy(nso);
 	} else {
-		NFS_SOCK_DBG("nfs connect %s created socket %p %s type %d%s port %d prot %d %d\n",
+		NFS_SOCK_DBG("nfs connect %s created socket %p %s type %d%s port %d prot %u %u\n",
 		    vfs_statfs(nmp->nm_mountp)->f_mntfromname, nso, naddr,
 		    sotype, resvport ? "r" : "", port, protocol, vers);
 		*nsop = nso;
@@ -1220,7 +1220,7 @@ tryagain:
 				nss.nss_version = nmp->nm_vers;
 			}
 		}
-		NFS_SOCK_DBG("nfs connect first %s, so type %d port %d prot %d %d\n",
+		NFS_SOCK_DBG("nfs connect first %s, so type %d port %d prot %u %u\n",
 		    vfs_statfs(nmp->nm_mountp)->f_mntfromname, nss.nss_sotype, nss.nss_port,
 		    nss.nss_protocol, nss.nss_version);
 	} else {
@@ -1235,7 +1235,7 @@ tryagain:
 			nss.nss_protocol = NFS_PROG;
 			nss.nss_version = nmp->nm_vers;
 		}
-		NFS_SOCK_DBG("nfs connect %s, so type %d port %d prot %d %d\n",
+		NFS_SOCK_DBG("nfs connect %s, so type %d port %d prot %u %u\n",
 		    vfs_statfs(nmp->nm_mountp)->f_mntfromname, nss.nss_sotype, nss.nss_port,
 		    nss.nss_protocol, nss.nss_version);
 	}
@@ -2017,9 +2017,9 @@ nfs_mount_sock_thread(void *arg, __unused wait_result_t wr)
 						req->r_xid = 0;
 					}
 				}
-				NFS_SOCK_DBG("nfs async%s restart: p %d x 0x%llx f 0x%x rtt %d\n",
+				NFS_SOCK_DBG("nfs async%s restart: p %u x 0x%llx f 0x%x rtt %d\n",
 				    nfs_request_using_gss(req) ? " gss" : "", req->r_procnum, req->r_xid,
-				    req->r_flags, req->r_rtt);
+				    (unsigned int)req->r_flags, req->r_rtt);
 				error = nfs_sigintr(nmp, req, req->r_thread, 0);
 				if (!error) {
 					error = nfs_request_add_header(req);
@@ -2045,8 +2045,8 @@ nfs_mount_sock_thread(void *arg, __unused wait_result_t wr)
 				error = 0;
 				continue;
 			}
-			NFS_SOCK_DBG("nfs async resend: p %d x 0x%llx f 0x%x rtt %d\n",
-			    req->r_procnum, req->r_xid, req->r_flags, req->r_rtt);
+			NFS_SOCK_DBG("nfs async resend: p %u x 0x%llx f 0x%x rtt %d\n",
+			    req->r_procnum, req->r_xid, (unsigned int)req->r_flags, req->r_rtt);
 			error = nfs_sigintr(nmp, req, req->r_thread, 0);
 			if (!error) {
 				req->r_flags |= R_SENDING;
@@ -3715,7 +3715,7 @@ nfs_request_match_reply(struct nfsmount *nmp, mbuf_t mrep)
 			 * add 1.
 			 */
 			if (proct[req->r_procnum] == 0) {
-				panic("nfs_request_match_reply: proct[%d] is zero", req->r_procnum);
+				panic("nfs_request_match_reply: proct[%u] is zero", req->r_procnum);
 			}
 			t1 = req->r_rtt + 1;
 			t1 -= (NFS_SRTT(req) >> 3);
@@ -3777,8 +3777,8 @@ nfs_wait_reply(struct nfsreq *req)
 		}
 		/* check if we need to resend */
 		if (req->r_flags & R_MUSTRESEND) {
-			NFS_SOCK_DBG("nfs wait resend: p %d x 0x%llx f 0x%x rtt %d\n",
-			    req->r_procnum, req->r_xid, req->r_flags, req->r_rtt);
+			NFS_SOCK_DBG("nfs wait resend: p %u x 0x%llx f 0x%x rtt %d\n",
+			    req->r_procnum, req->r_xid, (unsigned int)req->r_flags, req->r_rtt);
 			req->r_flags |= R_SENDING;
 			lck_mtx_unlock(&req->r_mtx);
 			if (nfs_request_using_gss(req)) {
@@ -3795,8 +3795,8 @@ nfs_wait_reply(struct nfsreq *req)
 			}
 			error = nfs_send(req, 1);
 			lck_mtx_lock(&req->r_mtx);
-			NFS_SOCK_DBG("nfs wait resend: p %d x 0x%llx f 0x%x rtt %d err %d\n",
-			    req->r_procnum, req->r_xid, req->r_flags, req->r_rtt, error);
+			NFS_SOCK_DBG("nfs wait resend: p %u x 0x%llx f 0x%x rtt %d err %d\n",
+			    req->r_procnum, req->r_xid, (unsigned int)req->r_flags, req->r_rtt, error);
 			if (error) {
 				break;
 			}
@@ -5160,7 +5160,7 @@ restart:
 				continue;
 			}
 			/* The request has timed out */
-			NFS_SOCK_DBG("nfs timeout: proc %d %d xid %llx rtt %d to %d # %d, t %ld/%d\n",
+			NFS_SOCK_DBG("nfs timeout: proc %u %d xid %llx rtt %d to %d # %d, t %ld/%d\n",
 			    req->r_procnum, proct[req->r_procnum],
 			    req->r_xid, req->r_rtt, timeo, nmp->nm_timeouts,
 			    (now.tv_sec - req->r_start) * NFS_HZ, maxtime);
@@ -5249,8 +5249,8 @@ restart:
 				lck_mtx_unlock(&req->r_mtx);
 				continue;
 			}
-			NFS_SOCK_DBG("nfs timer TERMINATE: p %d x 0x%llx f 0x%x rtt %d t %ld\n",
-			    req->r_procnum, req->r_xid, req->r_flags, req->r_rtt,
+			NFS_SOCK_DBG("nfs timer TERMINATE: p %u x 0x%llx f 0x%x rtt %d t %ld\n",
+			    req->r_procnum, req->r_xid, (unsigned int)req->r_flags, req->r_rtt,
 			    now.tv_sec - req->r_start);
 			nfs_softterm(req);
 			finish_asyncio = ((req->r_callback.rcb_func != NULL) && !(req->r_flags & R_WAITSENT));
