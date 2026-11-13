@@ -2480,13 +2480,13 @@ nfs_open_file_remove_open(struct nfs_open_file *nofp, uint32_t accessMode, uint3
 		if (accessMode == NFS_OPEN_SHARE_ACCESS_READ) {
 			if (delegated) {
 				if (nofp->nof_d_r == 0) {
-					NP(nofp->nof_np, "nfs: open(R) delegated count underrun, %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
+					NP(nofp->nof_np, "nfs: open(R) delegated count underrun, %u", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 				} else {
 					nofp->nof_d_r--;
 				}
 			} else {
 				if (nofp->nof_r == 0) {
-					NP(nofp->nof_np, "nfs: open(R) count underrun, %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
+					NP(nofp->nof_np, "nfs: open(R) count underrun, %u", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 				} else {
 					nofp->nof_r--;
 				}
@@ -2494,13 +2494,13 @@ nfs_open_file_remove_open(struct nfs_open_file *nofp, uint32_t accessMode, uint3
 		} else if (accessMode == NFS_OPEN_SHARE_ACCESS_WRITE) {
 			if (delegated) {
 				if (nofp->nof_d_w == 0) {
-					NP(nofp->nof_np, "nfs: open(W) delegated count underrun, %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
+					NP(nofp->nof_np, "nfs: open(W) delegated count underrun, %u", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 				} else {
 					nofp->nof_d_w--;
 				}
 			} else {
 				if (nofp->nof_w == 0) {
-					NP(nofp->nof_np, "nfs: open(W) count underrun, %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
+					NP(nofp->nof_np, "nfs: open(W) count underrun, %u", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 				} else {
 					nofp->nof_w--;
 				}
@@ -2508,13 +2508,13 @@ nfs_open_file_remove_open(struct nfs_open_file *nofp, uint32_t accessMode, uint3
 		} else if (accessMode == NFS_OPEN_SHARE_ACCESS_BOTH) {
 			if (delegated) {
 				if (nofp->nof_d_rw == 0) {
-					NP(nofp->nof_np, "nfs: open(RW) delegated count underrun, %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
+					NP(nofp->nof_np, "nfs: open(RW) delegated count underrun, %u", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 				} else {
 					nofp->nof_d_rw--;
 				}
 			} else {
 				if (nofp->nof_rw == 0) {
-					NP(nofp->nof_np, "nfs: open(RW) count underrun, %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
+					NP(nofp->nof_np, "nfs: open(RW) count underrun, %u", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 				} else {
 					nofp->nof_rw--;
 				}
@@ -2524,13 +2524,13 @@ nfs_open_file_remove_open(struct nfs_open_file *nofp, uint32_t accessMode, uint3
 		if (accessMode == NFS_OPEN_SHARE_ACCESS_READ) {
 			if (delegated) {
 				if (nofp->nof_d_r_dw == 0) {
-					NP(nofp->nof_np, "nfs: open(R,DW) delegated count underrun, %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
+					NP(nofp->nof_np, "nfs: open(R,DW) delegated count underrun, %u", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 				} else {
 					nofp->nof_d_r_dw--;
 				}
 			} else {
 				if (nofp->nof_r_dw == 0) {
-					NP(nofp->nof_np, "nfs: open(R,DW) count underrun, %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
+					NP(nofp->nof_np, "nfs: open(R,DW) count underrun, %u", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 				} else {
 					nofp->nof_r_dw--;
 				}
@@ -2538,13 +2538,13 @@ nfs_open_file_remove_open(struct nfs_open_file *nofp, uint32_t accessMode, uint3
 		} else if (accessMode == NFS_OPEN_SHARE_ACCESS_WRITE) {
 			if (delegated) {
 				if (nofp->nof_d_w_dw == 0) {
-					NP(nofp->nof_np, "nfs: open(W,DW) delegated count underrun, %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
+					NP(nofp->nof_np, "nfs: open(W,DW) delegated count underrun, %u", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 				} else {
 					nofp->nof_d_w_dw--;
 				}
 			} else {
 				if (nofp->nof_w_dw == 0) {
-					NP(nofp->nof_np, "nfs: open(W,DW) count underrun, %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
+					NP(nofp->nof_np, "nfs: open(W,DW) count underrun, %u", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 				} else {
 					nofp->nof_w_dw--;
 				}
@@ -2552,13 +2552,13 @@ nfs_open_file_remove_open(struct nfs_open_file *nofp, uint32_t accessMode, uint3
 		} else if (accessMode == NFS_OPEN_SHARE_ACCESS_BOTH) {
 			if (delegated) {
 				if (nofp->nof_d_rw_dw == 0) {
-					NP(nofp->nof_np, "nfs: open(RW,DW) delegated count underrun, %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
+					NP(nofp->nof_np, "nfs: open(RW,DW) delegated count underrun, %u", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 				} else {
 					nofp->nof_d_rw_dw--;
 				}
 			} else {
 				if (nofp->nof_rw_dw == 0) {
-					NP(nofp->nof_np, "nfs: open(RW,DW) count underrun, %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
+					NP(nofp->nof_np, "nfs: open(RW,DW) count underrun, %u", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 				} else {
 					nofp->nof_rw_dw--;
 				}
@@ -2568,13 +2568,13 @@ nfs_open_file_remove_open(struct nfs_open_file *nofp, uint32_t accessMode, uint3
 		if (accessMode == NFS_OPEN_SHARE_ACCESS_READ) {
 			if (delegated) {
 				if (nofp->nof_d_r_drw == 0) {
-					NP(nofp->nof_np, "nfs: open(R,DRW) delegated count underrun, %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
+					NP(nofp->nof_np, "nfs: open(R,DRW) delegated count underrun, %u", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 				} else {
 					nofp->nof_d_r_drw--;
 				}
 			} else {
 				if (nofp->nof_r_drw == 0) {
-					NP(nofp->nof_np, "nfs: open(R,DRW) count underrun, %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
+					NP(nofp->nof_np, "nfs: open(R,DRW) count underrun, %u", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 				} else {
 					nofp->nof_r_drw--;
 				}
@@ -2582,13 +2582,13 @@ nfs_open_file_remove_open(struct nfs_open_file *nofp, uint32_t accessMode, uint3
 		} else if (accessMode == NFS_OPEN_SHARE_ACCESS_WRITE) {
 			if (delegated) {
 				if (nofp->nof_d_w_drw == 0) {
-					NP(nofp->nof_np, "nfs: open(W,DRW) delegated count underrun, %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
+					NP(nofp->nof_np, "nfs: open(W,DRW) delegated count underrun, %u", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 				} else {
 					nofp->nof_d_w_drw--;
 				}
 			} else {
 				if (nofp->nof_w_drw == 0) {
-					NP(nofp->nof_np, "nfs: open(W,DRW) count underrun, %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
+					NP(nofp->nof_np, "nfs: open(W,DRW) count underrun, %u", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 				} else {
 					nofp->nof_w_drw--;
 				}
@@ -2596,13 +2596,13 @@ nfs_open_file_remove_open(struct nfs_open_file *nofp, uint32_t accessMode, uint3
 		} else if (accessMode == NFS_OPEN_SHARE_ACCESS_BOTH) {
 			if (delegated) {
 				if (nofp->nof_d_rw_drw == 0) {
-					NP(nofp->nof_np, "nfs: open(RW,DRW) delegated count underrun, %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
+					NP(nofp->nof_np, "nfs: open(RW,DRW) delegated count underrun, %u", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 				} else {
 					nofp->nof_d_rw_drw--;
 				}
 			} else {
 				if (nofp->nof_rw_drw == 0) {
-					NP(nofp->nof_np, "nfs: open(RW,DRW) count underrun, %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
+					NP(nofp->nof_np, "nfs: open(RW,DRW) count underrun, %u", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 				} else {
 					nofp->nof_rw_drw--;
 				}
@@ -2943,7 +2943,7 @@ restart:
 
 	error = nfs_open_file_find(np, noop, &nofp, 0, 0, 1);
 	if (error || (!error && (nofp->nof_flags & NFS_OPEN_FILE_LOST))) {
-		NP(np, "nfs_vnop_mmap: no open file for owner, error %d, %d", error, kauth_cred_getuid(noop->noo_cred));
+		NP(np, "nfs_vnop_mmap: no open file for owner, error %d, %u", error, kauth_cred_getuid(noop->noo_cred));
 		error = EPERM;
 	}
 	if (!error && (nofp->nof_flags & NFS_OPEN_FILE_REOPEN)) {
@@ -2979,7 +2979,7 @@ restart:
 	if (!(nofp->nof_access & NFS_OPEN_SHARE_ACCESS_READ)) {
 		if (nofp->nof_flags & NFS_OPEN_FILE_NEEDCLOSE) {
 			/* We shouldn't get here. We've already open the file for execve */
-			NP(np, "nfs_vnop_mmap: File already needs close access: 0x%x, cred: %d thread: %lld",
+			NP(np, "nfs_vnop_mmap: File already needs close access: 0x%x, cred: %u thread: %lld",
 			    nofp->nof_access, kauth_cred_getuid(nofp->nof_owner->noo_cred), thread_tid(vfs_context_thread(ctx)));
 		}
 		/*
@@ -3097,9 +3097,9 @@ restart:
 		error = nfs_close(np, nofp, nofp->nof_mmap_access, nofp->nof_mmap_deny, ctx);
 		if (error) {
 			if (!nfs_mount_state_error_should_restart(error)) {
-				NP(np, "nfs_vnop_mmap: close of previous mmap mode failed: %d, %d", error, kauth_cred_getuid(nofp->nof_owner->noo_cred));
+				NP(np, "nfs_vnop_mmap: close of previous mmap mode failed: %d, %u", error, kauth_cred_getuid(nofp->nof_owner->noo_cred));
 			}
-			NP(np, "nfs_vnop_mmap: update, close error %d, %d", error, kauth_cred_getuid(nofp->nof_owner->noo_cred));
+			NP(np, "nfs_vnop_mmap: update, close error %d, %u", error, kauth_cred_getuid(nofp->nof_owner->noo_cred));
 			goto out;
 		}
 		nofp->nof_mmap_access = nofp->nof_mmap_deny = 0;
@@ -3219,12 +3219,12 @@ loop:
 			error = nfs_close(np, nofp, nofp->nof_mmap_access, nofp->nof_mmap_deny, ctx);
 			if (!nfs_mount_state_error_should_restart(error)) {
 				if (error) { /* not a state-operation-restarting error, so just clear the access */
-					NP(np, "nfs_vnop_mnomap: close of mmap mode failed: %d, %d", error, kauth_cred_getuid(nofp->nof_owner->noo_cred));
+					NP(np, "nfs_vnop_mnomap: close of mmap mode failed: %d, %u", error, kauth_cred_getuid(nofp->nof_owner->noo_cred));
 				}
 				nofp->nof_mmap_access = nofp->nof_mmap_deny = 0;
 			}
 			if (error) {
-				NP(np, "nfs_vnop_mnomap: error %d, %d", error, kauth_cred_getuid(nofp->nof_owner->noo_cred));
+				NP(np, "nfs_vnop_mnomap: error %d, %u", error, kauth_cred_getuid(nofp->nof_owner->noo_cred));
 			}
 		}
 		nfs_open_file_clear_busy(nofp);
@@ -4747,7 +4747,7 @@ nfs_vnop_advlock(
 		/* find the open owner */
 		noop = nfs_open_owner_find(nmp, vfs_context_ucred(ctx), 0);
 		if (!noop) {
-			NP(np, "nfs_vnop_advlock: no open owner %d", kauth_cred_getuid(vfs_context_ucred(ctx)));
+			NP(np, "nfs_vnop_advlock: no open owner %u", kauth_cred_getuid(vfs_context_ucred(ctx)));
 			error = EPERM;
 			goto out;
 		}
@@ -4758,7 +4758,7 @@ restart:
 			error = EBADF;
 		}
 		if (!error && (nofp->nof_flags & NFS_OPEN_FILE_LOST)) {
-			NP(np, "nfs_vnop_advlock: LOST %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
+			NP(np, "nfs_vnop_advlock: LOST %u", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 			error = EIO;
 		}
 		if (!error && (nofp->nof_flags & NFS_OPEN_FILE_REOPEN)) {
@@ -4769,7 +4769,7 @@ restart:
 			}
 		}
 		if (error) {
-			NP(np, "nfs_vnop_advlock: no open file %d, %d", error, kauth_cred_getuid(noop->noo_cred));
+			NP(np, "nfs_vnop_advlock: no open file %d, %u", error, kauth_cred_getuid(noop->noo_cred));
 			goto out;
 		}
 		if (op == F_UNLCK) {
@@ -6188,7 +6188,7 @@ nfs4_claim_delegated_state_for_open_file(struct nfs_open_file *nofp, int flags)
 		}
 		if (reopen && (nfs_check_for_locks(noop, nofp) == 0)) {
 			/* just reopen the file on next access */
-			NP(nofp->nof_np, "nfs4_claim_delegated_state_for_open_file: %d, need reopen, %d",
+			NP(nofp->nof_np, "nfs4_claim_delegated_state_for_open_file: %d, need reopen, %u",
 			    reopen, kauth_cred_getuid(nofp->nof_owner->noo_cred));
 			lck_mtx_lock(&nofp->nof_lock);
 			nofp->nof_flags |= NFS_OPEN_FILE_REOPEN;
@@ -6196,7 +6196,7 @@ nfs4_claim_delegated_state_for_open_file(struct nfs_open_file *nofp, int flags)
 			return 0;
 		}
 		if (reopen) {
-			NP(nofp->nof_np, "nfs4_claim_delegated_state_for_open_file: %d, locks prevent reopen, %d",
+			NP(nofp->nof_np, "nfs4_claim_delegated_state_for_open_file: %d, locks prevent reopen, %u",
 			    reopen, kauth_cred_getuid(nofp->nof_owner->noo_cred));
 		}
 	}
@@ -6218,7 +6218,7 @@ nfs4_claim_delegated_state_for_open_file(struct nfs_open_file *nofp, int flags)
 				}
 				error = nmp->nm_funcs->nf_setlock_rpc(nofp->nof_np, nofp, nflp, 0, flags, current_thread(), noop->noo_cred);
 				if (error) {
-					NP(nofp->nof_np, "nfs: delegated lock claim (0x%llx, 0x%llx) failed %d, %d",
+					NP(nofp->nof_np, "nfs: delegated lock claim (0x%llx, 0x%llx) failed %d, %u",
 					    nflp->nfl_start, nflp->nfl_end, error, kauth_cred_getuid(nofp->nof_owner->noo_cred));
 					break;
 				}
@@ -6240,7 +6240,7 @@ nfs4_claim_delegated_state_for_open_file(struct nfs_open_file *nofp, int flags)
 	/* restart if it looks like a problem more than just losing the delegation */
 	if (!nfs_mount_state_error_delegation_lost(error) &&
 	    ((error == ETIMEDOUT) || nfs_mount_state_error_should_restart(error))) {
-		NP(nofp->nof_np, "nfs delegated lock claim error %d, %d", error, kauth_cred_getuid(nofp->nof_owner->noo_cred));
+		NP(nofp->nof_np, "nfs delegated lock claim error %d, %u", error, kauth_cred_getuid(nofp->nof_owner->noo_cred));
 		if ((error == ETIMEDOUT) && ((nmp = NFSTONMP(nofp->nof_np)))) {
 			nfs_need_reconnect(nmp);
 		}
@@ -6248,7 +6248,7 @@ nfs4_claim_delegated_state_for_open_file(struct nfs_open_file *nofp, int flags)
 	}
 
 	/* delegated state lost (once held but now not claimable) */
-	NP(nofp->nof_np, "nfs delegated state claim error %d, state lost, %d", error, kauth_cred_getuid(nofp->nof_owner->noo_cred));
+	NP(nofp->nof_np, "nfs delegated state claim error %d, state lost, %u", error, kauth_cred_getuid(nofp->nof_owner->noo_cred));
 
 	/*
 	 * Any problems with the delegation probably indicates that we
@@ -6584,7 +6584,7 @@ nfs_vnop_read(
 restart:
 	error = nfs_open_file_find(np, noop, &nofp, 0, 0, 1);
 	if (!error && (nofp->nof_flags & NFS_OPEN_FILE_LOST)) {
-		NP(np, "nfs_vnop_read: LOST %d", kauth_cred_getuid(noop->noo_cred));
+		NP(np, "nfs_vnop_read: LOST %u", kauth_cred_getuid(noop->noo_cred));
 		error = EIO;
 	}
 	if (!error && (nofp->nof_flags & NFS_OPEN_FILE_REOPEN)) {
@@ -6633,7 +6633,7 @@ restart:
 	if (!(nofp->nof_access & NFS_OPEN_SHARE_ACCESS_READ)) {
 		/* we don't have the file open, so open it for read access if we're not denied */
 		if (nofp->nof_flags & NFS_OPEN_FILE_NEEDCLOSE) {
-			NP(np, "nfs_vnop_read: File already needs close access: 0x%x, cred: %d thread: %lld",
+			NP(np, "nfs_vnop_read: File already needs close access: 0x%x, cred: %u thread: %lld",
 			    nofp->nof_access, kauth_cred_getuid(nofp->nof_owner->noo_cred), thread_tid(vfs_context_thread(ctx)));
 		}
 		if (nofp->nof_deny & NFS_OPEN_SHARE_DENY_READ) {
@@ -7700,7 +7700,7 @@ restart:
 		/* grab an open file - possibly provisional/nodeless if cache_lookup() failed */
 		error = nfs_open_file_find(anp, noop, &newnofp, 0, 0, 1);
 		if (!error && (newnofp->nof_flags & NFS_OPEN_FILE_LOST)) {
-			printf("nfs4_named_attr_get: LOST %d %s\n", kauth_cred_getuid(noop->noo_cred), cnp->cn_nameptr);
+			printf("nfs4_named_attr_get: LOST %u %s\n", kauth_cred_getuid(noop->noo_cred), cnp->cn_nameptr);
 			error = EIO;
 		}
 		if (!error && (newnofp->nof_flags & NFS_OPEN_FILE_REOPEN)) {
