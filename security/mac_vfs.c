@@ -1222,7 +1222,7 @@ mac_vnode_check_signature(struct vnode *vp, struct cs_blob *cs_blob,
 		if (error == 0) {
 			panic("mac_vnode_check_signature: MAC hook returned no error, "
 			    "but status is claimed to be fatal? "
-			    "path: '%s', fatal_failure_desc_len: %ld, fatal_failure_desc:\n%s\n",
+			    "path: '%s', fatal_failure_desc_len: %zu, fatal_failure_desc:\n%s\n",
 			    path, fatal_failure_desc_len, fatal_failure_desc);
 		}
 
@@ -1265,12 +1265,12 @@ mac_vnode_check_signature(struct vnode *vp, struct cs_blob *cs_blob,
 
 				if (mc_error != KERN_SUCCESS) {
 					printf("mac_vnode_check_signature: %s: failed to copy reason string "
-					    "(kcdata_memcpy error: %d, length: %ld)\n",
+					    "(kcdata_memcpy error: %d, length: %zu)\n",
 					    path, mc_error, fatal_failure_desc_len);
 				}
 			} else {
 				printf("mac_vnode_check_signature: %s: failed to allocate space for reason string "
-				    "(os_reason_alloc_buffer error: %d, kcdata error: %d, length: %ld)\n",
+				    "(os_reason_alloc_buffer error: %d, kcdata error: %d, length: %zu)\n",
 				    path, reason_error, kcdata_error, fatal_failure_desc_len);
 			}
 		}
