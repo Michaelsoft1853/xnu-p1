@@ -365,7 +365,7 @@ loop:
 				}
 				if (update_flags) {
 					NFS_NODE_DBG("vnode_update_identity old name %s new name %.*s update flags = %x\n",
-					    vp->v_name, cnp->cn_namelen, cnp->cn_nameptr ? cnp->cn_nameptr : "", update_flags);
+					    vp->v_name, cnp->cn_namelen, cnp->cn_nameptr ? cnp->cn_nameptr : "", (unsigned int)update_flags);
 					vnode_update_identity(vp, NFSTOV(dnp), cnp->cn_nameptr, cnp->cn_namelen, 0, update_flags);
 				}
 			}
@@ -744,7 +744,7 @@ restart:
 			}
 		}
 		if (nofp->nof_opencnt && !force) {
-			NP(np, "nfs_vnop_inactive: file still open: %d", nofp->nof_opencnt);
+			NP(np, "nfs_vnop_inactive: file still open: %u", nofp->nof_opencnt);
 		}
 		if (!force && (nofp->nof_access || nofp->nof_deny ||
 		    nofp->nof_mmap_access || nofp->nof_mmap_deny ||
@@ -754,7 +754,7 @@ restart:
 		    nofp->nof_d_r || nofp->nof_d_w || nofp->nof_d_rw ||
 		    nofp->nof_d_r_dw || nofp->nof_d_w_dw || nofp->nof_d_rw_dw ||
 		    nofp->nof_d_r_drw || nofp->nof_d_w_drw || nofp->nof_d_rw_drw)) {
-			NP(np, "nfs_vnop_inactive: non-zero access: %d %d %d %d # %u.%u %u.%u %u.%u dw %u.%u %u.%u %u.%u drw %u.%u %u.%u %u.%u",
+		NP(np, "nfs_vnop_inactive: non-zero access: %d %d %d %d # %u.%u %u.%u %u.%u dw %u.%u %d.%d %d.%d drw %d.%d %d.%d %d.%d",
 			    nofp->nof_access, nofp->nof_deny,
 			    nofp->nof_mmap_access, nofp->nof_mmap_deny,
 			    nofp->nof_r, nofp->nof_d_r,
@@ -948,7 +948,7 @@ nfs_vnop_reclaim(
 	/* clean up file locks */
 	TAILQ_FOREACH_SAFE(nflp, &np->n_locks, nfl_link, nextnflp) {
 		if (!(nflp->nfl_flags & NFS_FILE_LOCK_DEAD) && !force) {
-			NP(np, "nfs_vnop_reclaim: lock 0x%llx 0x%llx 0x%x (bc %d)",
+			NP(np, "nfs_vnop_reclaim: lock 0x%llx 0x%llx 0x%x (bc %u)",
 			    nflp->nfl_start, nflp->nfl_end, nflp->nfl_flags, nflp->nfl_blockcnt);
 		}
 		if (!(nflp->nfl_flags & (NFS_FILE_LOCK_BLOCKED | NFS_FILE_LOCK_DEAD))) {
@@ -974,7 +974,7 @@ nfs_vnop_reclaim(
 	}
 	/* clean up open state */
 	if (np->n_openrefcnt && !force) {
-		NP(np, "nfs_vnop_reclaim: still open: %d", np->n_openrefcnt);
+		NP(np, "nfs_vnop_reclaim: still open: %u", np->n_openrefcnt);
 	}
 	TAILQ_FOREACH_SAFE(nofp, &np->n_opens, nof_link, nextnofp) {
 		if (nofp->nof_flags & NFS_OPEN_FILE_BUSY) {
@@ -982,7 +982,7 @@ nfs_vnop_reclaim(
 		}
 		if (!(np->n_flag & NREVOKE) && !(nofp->nof_flags & NFS_OPEN_FILE_LOST)) {
 			if (nofp->nof_opencnt && !force) {
-				NP(np, "nfs_vnop_reclaim: file still open: %d", nofp->nof_opencnt);
+				NP(np, "nfs_vnop_reclaim: file still open: %u", nofp->nof_opencnt);
 			}
 			if (!force && (nofp->nof_access || nofp->nof_deny ||
 			    nofp->nof_mmap_access || nofp->nof_mmap_deny ||
@@ -992,7 +992,7 @@ nfs_vnop_reclaim(
 			    nofp->nof_d_r || nofp->nof_d_w || nofp->nof_d_rw ||
 			    nofp->nof_d_r_dw || nofp->nof_d_w_dw || nofp->nof_d_rw_dw ||
 			    nofp->nof_d_r_drw || nofp->nof_d_w_drw || nofp->nof_d_rw_drw)) {
-				NP(np, "nfs_vnop_reclaim: non-zero access: %d %d %d %d # %u.%u %u.%u %u.%u dw %u.%u %u.%u %u.%u drw %u.%u %u.%u %u.%u",
+				NP(np, "nfs_vnop_reclaim: non-zero access: %d %d %d %d # %u.%u %u.%u %u.%u dw %u.%u %d.%d %d.%d drw %d.%d %d.%d %d.%d",
 				    nofp->nof_access, nofp->nof_deny,
 				    nofp->nof_mmap_access, nofp->nof_mmap_deny,
 				    nofp->nof_r, nofp->nof_d_r,
