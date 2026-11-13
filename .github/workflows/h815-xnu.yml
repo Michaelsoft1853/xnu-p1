@@ -26,7 +26,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 120
     env:
-      KERNEL_CONFIG: ${{ inputs.kernel_config }}
+      KERNEL_CONFIG: ${{ inputs.kernel_config || 'DEVELOPMENT' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -73,7 +73,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: h815-xnu-${{ inputs.kernel_config }}
+          name: h815-xnu-${{ inputs.kernel_config || 'DEVELOPMENT' }}
           path: |
             artifact/
             build.log
