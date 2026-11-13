@@ -38,6 +38,7 @@ jobs:
           xcrun --find clang
           xcrun --find mig
           xcrun --sdk macosx --show-sdk-path
+          xcrun --sdk iphoneos --show-sdk-path
 
       - name: Build H815 kernel
         shell: bash
@@ -57,6 +58,10 @@ jobs:
             KERNEL_CONFIGS="$KERNEL_CONFIG" \
             MACHINE_CONFIGS=MSM8992 \
             ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG=arm64 \
+            SDKROOT=iphoneos \
+            HOST_SDKROOT=macosx \
+            SDKVERSION=12.0 \
+            CWARNFLAGS='$(CWARNFLAGS_STD) -Wno-missing-include-dirs' \
             XCRUN=xcrun \
             BUILD_LTO=0 \
             DO_CTFCONVERT=0 \
