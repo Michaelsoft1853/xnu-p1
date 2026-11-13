@@ -22,7 +22,8 @@ DATAFILES = \
 	twister.h \
 	hurricane.h \
 	BCM2837.h \
-	MSM8994.h
+	MSM8994.h \
+	MSM8992.h
 
 
 INSTALL_MD_LIST	= ${DATAFILES}

@@ -320,7 +320,10 @@ static struct tbd_ops    t8015_funcs = {NULL, NULL, NULL};
 static struct tbd_ops    bcm2837_funcs = {NULL, NULL, NULL};
 #endif /* defined(ARM_BOARD_CLASS_BCM2837) */
 
-#if defined(ARM_BOARD_CLASS_MSM8994)
+#if defined(ARM_BOARD_CLASS_MSM8994) || defined(ARM_BOARD_CLASS_MSM8992)
+/* The `op2_*` names are retained for the reference target's ABI; the GIC and
+ * virtual timer path is shared with H815, while OP2 reset/CPU bring-up stays
+ * behind the MSM8994 board config. */
 vm_offset_t op2_gic_dist_base = 0;
 vm_offset_t op2_gic_cpu_base = 0;
 uint32_t    op2_vtimer_intid = 20;
@@ -328,15 +331,18 @@ volatile uint32_t *op2_imem_reg = NULL;
 volatile uint32_t *op2_ps_hold_reg = NULL;
 volatile uint32_t *op2_wdt_reg = NULL;
 
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
 static uint64_t op2_start_cycles = 0;
 static uint32_t op2_deadline_sec = 0;
 static boolean_t op2_deadline_parsed = FALSE;
+#endif
 
 void
 op2_vtimer_set_decrementer(uint32_t dec_value)
 {
 	__asm__ volatile("msr CNTV_TVAL_EL0, %0" : : "r"((uint64_t)dec_value));
 
+#if defined(ARM64_BOARD_CONFIG_MSM8994)
 	if (!op2_deadline_parsed) {
 		op2_deadline_parsed = TRUE;
 		PE_parse_boot_argn("op2_deadline", &op2_deadline_sec, sizeof(op2_deadline_sec));
@@ -368,6 +374,7 @@ op2_vtimer_set_decrementer(uint32_t dec_value)
 			panic("OP2: software timer deadline exceeded (%u s); resetting\n", op2_deadline_sec);
 		}
 	}
+#endif
 }
 
 uint32_t
@@ -385,12 +392,12 @@ op2_vtimer_enable(void)
 	__asm__ volatile("msr CNTV_CTL_EL0, %0" : : "r"(cntv_ctl));
 }
 
-static struct tbd_ops msm8994_funcs = {
+static struct tbd_ops qcom_vtimer_funcs = {
 	.tbd_fiq_handler     = NULL,
 	.tbd_get_decrementer = &op2_vtimer_get_decrementer,
 	.tbd_set_decrementer = &op2_vtimer_set_decrementer,
 };
-#endif /* defined(ARM_BOARD_CLASS_MSM8994) */
+#endif /* defined(ARM_BOARD_CLASS_MSM8994) || defined(ARM_BOARD_CLASS_MSM8992) */
 
 vm_offset_t     gPicBase;
 vm_offset_t     gTimerBase;
@@ -640,6 +647,9 @@ pe_arm_map_interrupt_controller(void)
 			vm_size_t   gicc_size = (vm_size_t)reg64[3];
 
 			uint32_t vtimer_intid = 0;
+#if defined(ARM_BOARD_CLASS_MSM8992)
+			vtimer_intid = MSM8992_VTIMER_INTID;
+#endif
 			if (DTGetProperty(entryP, "virtual-timer-intid", (void **)&vtimer_prop, &vtimer_size) == kSuccess && vtimer_size == sizeof(uint32_t)) {
 				vtimer_intid = *vtimer_prop;
 			}
@@ -678,6 +688,7 @@ pe_arm_map_interrupt_controller(void)
 			}
 
 			DTEntry uart_entry;
+#if defined(ARM_BOARD_CLASS_MSM8994)
 			if (DTFindEntry("name", "uart0", &uart_entry) != kSuccess) {
 				op2_imem_reg = (volatile uint32_t *)ml_io_map(0xfe87f000, 0x1000);
 				op2_ps_hold_reg = (volatile uint32_t *)ml_io_map(0xfc4ab000, 0x1000);
@@ -687,6 +698,7 @@ pe_arm_map_interrupt_controller(void)
 				    (unsigned long)(uintptr_t)op2_ps_hold_reg,
 				    (unsigned long)(uintptr_t)op2_wdt_reg);
 			}
+#endif
 
 			return 1;
 		}
@@ -821,8 +833,10 @@ pe_arm_init_timer(void *args)
 		tbd_funcs = &bcm2837_funcs;
 	} else
 #endif
-#if defined(ARM_BOARD_CLASS_MSM8994)
-	if (!strcmp(gPESoCDeviceType, "op2-io") || !strcmp(gPESoCDeviceType, "msm8994-io")) {
+#if defined(ARM_BOARD_CLASS_MSM8994) || defined(ARM_BOARD_CLASS_MSM8992)
+	if (!strcmp(gPESoCDeviceType, "op2-io") || !strcmp(gPESoCDeviceType, "msm8994-io") ||
+	    !strcmp(gPESoCDeviceType, "msm8992-io") || !strcmp(gPESoCDeviceType, "lgg4-io") ||
+	    !strcmp(gPESoCDeviceType, "h815-io")) {
 		if (op2_gic_dist_base && op2_gic_cpu_base) {
 			volatile uint32_t *gicd = (volatile uint32_t *)op2_gic_dist_base;
 			volatile uint32_t *gicc = (volatile uint32_t *)op2_gic_cpu_base;
@@ -861,7 +875,7 @@ pe_arm_init_timer(void *args)
 			kprintf("GICv2 [TIMER]: GICD_ISENABLER0=0x%08x, GICD_ISPENDR0=0x%08x, GICC_CTLR=0x%08x, GICC_PMR=0x%08x\n",
 			    gicd[0x0100 / 4], gicd[0x0200 / 4], gicc[0x0000 / 4], gicc[0x0004 / 4]);
 		}
-		tbd_funcs = &msm8994_funcs;
+		tbd_funcs = &qcom_vtimer_funcs;
 	} else
 #endif
 	return 0;

@@ -1887,7 +1887,7 @@ fiq_context_init(boolean_t enable_fiq __unused)
 void
 fiq_context_bootstrap(boolean_t enable_fiq)
 {
-#if defined(APPLE_ARM64_ARCH_FAMILY) || defined(BCM2837) || defined(MSM8994)
+#if defined(APPLE_ARM64_ARCH_FAMILY) || defined(BCM2837) || defined(MSM8994) || defined(MSM8992)
 	/* Could fill in our own ops here, if we needed them */
 	uint64_t        ticks_per_sec, ticks_per_event, events_per_sec;
 	uint32_t        bit_index;

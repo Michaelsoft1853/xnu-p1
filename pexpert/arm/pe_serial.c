@@ -1076,11 +1076,27 @@ serial_init(void)
 	}
 
 	if (!gPESF) {
-		if (DTFindEntry("name", "op2-fbcon", &entryP) == kSuccess) {
-			DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size);
-			g_ramoops_buf = (volatile struct op2_ramoops_buffer *)ml_io_map(*reg_prop, *(reg_prop + 1));
+		/* H815 shim exposes a Linux-compatible console ring in the reserved
+		 * first 256 KiB of the LGgFour ramoops block.  XNU's embedded panic
+		 * log uses the disjoint remainder through the ADT `pram` node. */
+		if (DTFindEntry("name", "h815-ramoops-console", &entryP) == kSuccess &&
+		    DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size) == kSuccess &&
+		    prop_size >= 2 * sizeof(uintptr_t) && reg_prop[1] >= 16) {
+			g_ramoops_buf = (volatile struct op2_ramoops_buffer *)ml_io_map(reg_prop[0], reg_prop[1]);
 			if (g_ramoops_buf) {
 				gPESF = &op2_ramoops_serial_functions;
+			}
+		}
+	}
+
+	if (!gPESF) {
+		if (DTFindEntry("name", "op2-fbcon", &entryP) == kSuccess) {
+			if (DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size) == kSuccess &&
+			    prop_size >= 2 * sizeof(uintptr_t) && reg_prop[1] >= 16) {
+				g_ramoops_buf = (volatile struct op2_ramoops_buffer *)ml_io_map(reg_prop[0], reg_prop[1]);
+				if (g_ramoops_buf) {
+					gPESF = &op2_ramoops_serial_functions;
+				}
 			}
 		}
 	}

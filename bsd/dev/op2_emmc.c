@@ -1,15 +1,14 @@
 /*
- * OnePlus 2 (MSM8994) Internal eMMC 5.0 / SDHCI Persistent Storage Controller
+ * Qualcomm MSM899x Internal eMMC 5.0 / SDHCI Persistent Storage Controller
  * Darwin/XNU Block Device Driver
  *
  * Conditional Read/Write Capability:
- * - Boot argument 'emmcrw=1' or 'rootrw=1' enables write operations.
- * - Defaults to strict read-only safety mode if flags are absent to prevent
- *   accidental partition corruption during early bring-up.
+ * - Boot argument 'emmcrw=1' enables write operations.
+ * - Defaults to strict read-only mode; emmcrw=1 opts into writes.
  * - Features hardware CMD12 abort recovery, DAT0 busy line status polling,
  *   and automatic 3x retries on CRC or timeout faults.
  */
-#if defined(ARM64_BOARD_CONFIG_MSM8994)
+#if defined(ARM64_BOARD_CONFIG_MSM8994) || defined(ARM64_BOARD_CONFIG_MSM8992)
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/buf.h>
@@ -25,15 +24,24 @@
 #include <vm/vm_kern.h>
 #include <pexpert/pexpert.h>
 #include <pexpert/device_tree.h>
+#if defined(ARM64_BOARD_CONFIG_MSM8992)
+#include <pexpert/arm64/MSM8992.h>
+#else
+#include <pexpert/arm64/MSM8994.h>
+#endif
 #include <libkern/libkern.h>
 
 int op2_emmc_rootdev(dev_t *dev);
 extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern uint64_t ml_get_timebase(void);
 
-#define SDHC_REG_BASE    0xf9824900UL
-#define SDHC_CORE_BASE   0xf9824000UL
-#define TLMM_SDC1_CTL_REG 0xfd512044UL
+#if defined(ARM64_BOARD_CONFIG_MSM8992)
+#define SDHC_REG_BASE    MSM8992_SDHCI_BASE
+#define SDHC_CORE_BASE   MSM8992_SDHCI_CORE_BASE
+#else
+#define SDHC_REG_BASE    MSM8994_SDHCI_BASE
+#define SDHC_CORE_BASE   MSM8994_SDHCI_CORE_BASE
+#endif
 
 /* Core MSM SDCC Registers */
 #define CORE_POWER            0x00
@@ -1179,11 +1187,13 @@ static int op2_emmc_init(void)
 	char want[64] = "userdata";
 	PE_parse_boot_argn("emmcroot", want, sizeof(want));
 
-	int rw = 1;
+	int rw = 0;
 	PE_parse_boot_argn("emmcrw", &rw, sizeof(rw));
 	if (rw != 0) {
 		op2_emmc_writable = 1;
 		printf("OP2 eMMC: write support ENABLED for partition \"%s\"\n", want);
+	} else {
+		printf("Qualcomm eMMC: write support disabled; exposing partition \"%s\" read-only\n", want);
 	}
 
 	op2_emmc.regs = ml_io_map(SDHC_REG_BASE, 0x200);
@@ -1256,4 +1266,4 @@ int op2_emmc_rootdev(dev_t *dev)
 	return error;
 }
 
-#endif /* ARM64_BOARD_CONFIG_MSM8994 */
+#endif /* ARM64_BOARD_CONFIG_MSM8994 || ARM64_BOARD_CONFIG_MSM8992 */

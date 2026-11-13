@@ -188,4 +188,19 @@
 #define CORE_NCTRS 6
 #endif  /* ARM64_BOARD_CONFIG_MSM8994 */
 
+#ifdef ARM64_BOARD_CONFIG_MSM8992
+#define MSM8992
+#define NO_MONITOR 1
+#define NO_ECORE 1
+#define ARM_ARCH_TIMER
+#include <pexpert/arm64/MSM8992.h>
+#define __ARM_L2CACHE_SIZE_LOG__ 20
+#define ARM_BOARD_CLASS_MSM8992
+/* XNU parses every CPU node before applying the `cpus=1` boot arg. Keep
+ * storage for all four A53 and two A57 logical CPU IDs, but boot only the
+ * firmware's running CPU until H815 ACC/SCM bring-up is implemented. */
+#define CPU_COUNT MSM8992_CPU_COUNT
+#define CORE_NCTRS 6
+#endif  /* ARM64_BOARD_CONFIG_MSM8992 */
+
 #endif /* ! _PEXPERT_ARM_BOARD_CONFIG_H */

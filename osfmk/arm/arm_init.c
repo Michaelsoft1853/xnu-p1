@@ -246,8 +246,8 @@ arm_init(
 		 * Select the advertised kernel page size; with the boot-arg
 		 * use to the hardware page size for the current platform.
 		 */
-#if defined(ARM64_BOARD_CONFIG_MSM8994)
-		/* MSM8994 Cortex-A57/A53 uses 4 KB hardware page granule */
+#if defined(ARM64_BOARD_CONFIG_MSM8994) || defined(ARM64_BOARD_CONFIG_MSM8992)
+		/* Qualcomm MSM899x Cortex-A57/A53 uses a 4 KB hardware page granule. */
 		PAGE_SHIFT_CONST = ARM_PGSHIFT;
 		page_shift_user32 = PAGE_SHIFT_CONST;
 #else

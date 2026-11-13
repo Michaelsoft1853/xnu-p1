@@ -1,0 +1,80 @@
+name: H815 XNU kernel
+
+on:
+  push:
+    branches:
+      - h815-port
+  workflow_dispatch:
+    inputs:
+      kernel_config:
+        description: XNU build configuration
+        required: true
+        type: choice
+        options:
+          - DEVELOPMENT
+          - DEBUG
+          - RELEASE
+        default: DEVELOPMENT
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Mirrors the ios-sweet workflow's Xcode 15-era macOS runner.
+    runs-on: macos-14
+    timeout-minutes: 120
+    env:
+      KERNEL_CONFIG: ${{ inputs.kernel_config }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Apple build tools
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun --find clang
+          xcrun --find mig
+          xcrun --sdk macosx --show-sdk-path
+
+      - name: Build H815 kernel
+        shell: bash
+        run: |
+          set -o pipefail
+          objroot="$GITHUB_WORKSPACE/BUILD/obj"
+          dstroot="$GITHUB_WORKSPACE/BUILD/dst"
+          mkdir -p "$objroot" "$dstroot"
+          make -C "$GITHUB_WORKSPACE" \
+            -j1 \
+            MAKEJOBS="--jobs=1" \
+            VERBOSE=YES \
+            SRCROOT="$GITHUB_WORKSPACE" \
+            OBJROOT="$objroot" \
+            DSTROOT="$dstroot" \
+            ARCH_CONFIGS=ARM64 \
+            KERNEL_CONFIGS="$KERNEL_CONFIG" \
+            MACHINE_CONFIGS=MSM8992 \
+            ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG=arm64 \
+            XCRUN=xcrun \
+            BUILD_LTO=0 \
+            DO_CTFCONVERT=0 \
+            DO_CTFMERGE=0 \
+            2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+          config_lower=$(printf '%s' "$KERNEL_CONFIG" | tr '[:upper:]' '[:lower:]')
+          kernel="$objroot/${KERNEL_CONFIG}_ARM64_MSM8992/kernel.${config_lower}.msm8992"
+          test -s "$kernel"
+          mkdir -p "$GITHUB_WORKSPACE/artifact"
+          cp "$kernel" "$GITHUB_WORKSPACE/artifact/kernel.${config_lower}.msm8992"
+
+      - name: Upload kernel and build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: h815-xnu-${{ inputs.kernel_config }}
+          path: |
+            artifact/
+            build.log
+          if-no-files-found: warn
+          retention-days: 7
