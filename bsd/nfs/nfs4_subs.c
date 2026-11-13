@@ -206,7 +206,7 @@ nfs4_init_clientid(struct nfsmount *nmp)
 		*(uint32_t*)ncip->nci_id += 1;
 	}
 	if (*(uint32_t*)ncip->nci_id) {
-		printf("nfs client ID collision (%d) for %s on %s\n", *(uint32_t*)ncip->nci_id,
+		printf("nfs client ID collision (%u) for %s on %s\n", *(uint32_t*)ncip->nci_id,
 		    vsfs->f_mntfromname, vsfs->f_mntonname);
 	}
 	if (ncip2) {
@@ -1526,7 +1526,7 @@ nfs4_addv4domain(char *id, size_t *idlen)
 	}
 
 	if (!error && nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_SUCCESSFUL_MAPPINGS) {
-		printf("nfs4_guid2id: id after nfs4 domain map: %s[%zd].\n", id, *idlen);
+		printf("nfs4_guid2id: id after nfs4 domain map: %s[%zu].\n", id, *idlen);
 	}
 
 	return error;
@@ -2688,7 +2688,7 @@ nfs4_expired_check_delegation(nfsnode_t np, vfs_context_t ctx)
 		}
 		/* we have an open that is not lost and not marked for reopen */
 		// XXX print out what's keeping this node from dropping the delegation.
-		NP(nofp->nof_np, "nfs4_expired_check_delegation: !drop: opencnt %d flags 0x%x access %d %d mmap %d %d",
+		NP(nofp->nof_np, "nfs4_expired_check_delegation: !drop: opencnt %u flags 0x%x access %d %d mmap %d %d",
 		    nofp->nof_opencnt, nofp->nof_flags,
 		    nofp->nof_access, nofp->nof_deny,
 		    nofp->nof_mmap_access, nofp->nof_mmap_deny);
@@ -2891,7 +2891,7 @@ restart:
 				}
 				if (reopen && (nfs_check_for_locks(noop, nofp) == 0)) {
 					/* just reopen the file on next access */
-					NP(nofp->nof_np, "nfs_recover: %d, need reopen for %d %p 0x%x", reopen,
+					NP(nofp->nof_np, "nfs_recover: %d, need reopen for %u %p 0x%x", reopen,
 					    kauth_cred_getuid(noop->noo_cred), nofp->nof_np, nofp->nof_np->n_flag);
 					lck_mtx_lock(&nofp->nof_lock);
 					nofp->nof_flags |= NFS_OPEN_FILE_REOPEN;
@@ -2899,7 +2899,7 @@ restart:
 				} else {
 					/* open file state lost */
 					if (reopen) {
-						NP(nofp->nof_np, "nfs_recover: %d, can't reopen because of locks %d %p", reopen,
+						NP(nofp->nof_np, "nfs_recover: %d, can't reopen because of locks %u %p", reopen,
 						    kauth_cred_getuid(noop->noo_cred), nofp->nof_np);
 					}
 					lost = 1;
@@ -2982,7 +2982,7 @@ reclaim_locks:
 
 			if (lost) {
 				/* revoke open file state */
-				NP(nofp->nof_np, "nfs_recover: state lost for %d %p 0x%x",
+				NP(nofp->nof_np, "nfs_recover: state lost for %u %p 0x%x",
 				    kauth_cred_getuid(noop->noo_cred), nofp->nof_np, nofp->nof_np->n_flag);
 				nfs_revoke_open_state_for_node(nofp->nof_np);
 			}

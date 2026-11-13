@@ -61,7 +61,7 @@ jobs:
             SDKROOT=iphoneos \
             HOST_SDKROOT=macosx \
             SDKVERSION=12.0 \
-            CWARNFLAGS='$(CWARNFLAGS_STD) -Wno-missing-include-dirs -Wno-error=declaration-after-statement -Wno-error=pre-c11-compat' \
+            CWARNFLAGS='$(CWARNFLAGS_STD) -Wno-missing-include-dirs -Wno-error=declaration-after-statement -Wno-error=pre-c11-compat -Wno-error=switch-default' \
             XCRUN=xcrun \
             BUILD_LTO=0 \
             DO_CTFCONVERT=0 \
