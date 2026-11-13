@@ -21,8 +21,9 @@ permissions:
 
 jobs:
   build:
-    # Mirrors the ios-sweet workflow's Xcode 15-era macOS runner.
-    runs-on: macos-14
+    # macOS 14 runners were retired; macos-15 is a supported Apple Silicon image.
+    # Its Xcode 16 toolchain may need compatibility fixes for this older XNU.
+    runs-on: macos-15
     timeout-minutes: 120
     env:
       KERNEL_CONFIG: ${{ inputs.kernel_config }}
