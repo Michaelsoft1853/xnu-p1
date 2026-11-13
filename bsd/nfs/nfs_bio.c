@@ -1539,11 +1539,9 @@ int
 nfs_buf_read(struct nfsbuf *bp)
 {
 	int error = 0;
-	nfsnode_t np;
 	thread_t thd;
 	kauth_cred_t cred;
 
-	np = bp->nb_np;
 	cred = bp->nb_rcred;
 	if (IS_VALID_CRED(cred)) {
 		kauth_cred_ref(cred);
@@ -1798,7 +1796,7 @@ finish:
 		lck_mtx_lock(&nmp->nm_lock);
 		if ((error != NFSERR_OLD_STATEID) && (error != NFSERR_GRACE) && (cb.rcb_args[2] == nmp->nm_stategenid)) {
 			NP(np, "nfs_buf_read_rpc_finish: error %d @ 0x%llx, 0x%x 0x%x, initiating recovery",
-			    error, NBOFF(bp) + offset, cb.rcb_args[2], nmp->nm_stategenid);
+			    error, (unsigned long long)(NBOFF(bp) + offset), cb.rcb_args[2], nmp->nm_stategenid);
 			nfs_need_recover(nmp, error);
 		}
 		lck_mtx_unlock(&nmp->nm_lock);
@@ -2015,14 +2013,13 @@ nfs_bioread(nfsnode_t np, uio_t uio, int ioflag, vfs_context_t ctx)
 	daddr64_t lbn, rabn = 0, lastrabn, maxrabn = -1;
 	off_t diff;
 	int error = 0, n = 0, on = 0;
-	int nfsvers, biosize, modified, readaheads = 0;
+	int biosize, modified, readaheads = 0;
 	thread_t thd;
 	kauth_cred_t cred;
 	int64_t io_resid;
 
 	FSDBG_TOP(514, np, uio_offset(uio), uio_resid(uio), ioflag);
 
-	nfsvers = nmp->nm_vers;
 	biosize = nmp->nm_biosize;
 	thd = vfs_context_thread(ctx);
 	cred = vfs_context_ucred(ctx);
@@ -3033,7 +3030,7 @@ finish:
 		lck_mtx_lock(&nmp->nm_lock);
 		if ((error != NFSERR_OLD_STATEID) && (error != NFSERR_GRACE) && (cb.rcb_args[2] == nmp->nm_stategenid)) {
 			NP(np, "nfs_buf_write_rpc_finish: error %d @ 0x%llx, 0x%x 0x%x, initiating recovery",
-			    error, NBOFF(bp) + offset, cb.rcb_args[2], nmp->nm_stategenid);
+			    error, (unsigned long long)(NBOFF(bp) + offset), cb.rcb_args[2], nmp->nm_stategenid);
 			nfs_need_recover(nmp, error);
 		}
 		lck_mtx_unlock(&nmp->nm_lock);
