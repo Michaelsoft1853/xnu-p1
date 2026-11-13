@@ -313,7 +313,7 @@ rpc_gss_integ_data_create(gss_ctx_id_t ctx, mbuf_t *mb_head, uint32_t seqnum, ui
 	length += NFSX_UNSIGNED;  /* Add the sequence number to the length */
 	major = gss_krb5_get_mic_mbuf(&error, ctx, 0, *mb_head, 0, length, &mic);
 	if (major != GSS_S_COMPLETE) {
-		printf("gss_krb5_get_mic_mbuf failed %d\n", error);
+		printf("gss_krb5_get_mic_mbuf failed %u\n", error);
 		return error;
 	}
 
@@ -473,7 +473,7 @@ rpc_gss_priv_data_restore(gss_ctx_id_t ctx, mbuf_t *mb_head, size_t len)
 
 	major = gss_krb5_unwrap_mbuf(&error, ctx, mb_head, 0, len, NULL, &qop);
 	if (major != GSS_S_COMPLETE) {
-		printf("gss_krb5_unwrap_mbuf failed. major = %d minor = %d\n", (int)major, error);
+		printf("gss_krb5_unwrap_mbuf failed. major = %d minor = %u\n", (int)major, error);
 		return error;
 	}
 	mb = *mb_head;
@@ -534,7 +534,7 @@ nfs_gss_clnt_ctx_dump(struct nfsmount *nmp)
 	NFS_GSS_DBG("Enter\n");
 	TAILQ_FOREACH(cp, &nmp->nm_gsscl, gss_clnt_entries) {
 		lck_mtx_lock(cp->gss_clnt_mtx);
-		printf("context %d/%d: refcnt = %d, flags = %x\n",
+		printf("context %d/%u: refcnt = %d, flags = %x\n",
 		    kauth_cred_getasid(cp->gss_clnt_cred),
 		    kauth_cred_getauid(cp->gss_clnt_cred),
 		    cp->gss_clnt_refcnt, cp->gss_clnt_flags);
@@ -568,12 +568,12 @@ nfs_gss_clnt_ctx_name(struct nfsmount *nmp, struct nfs_gss_clnt_ctx *cp, char *b
 		nlen = np ? strlen(cp->gss_clnt_display) : 0;
 	}
 	if (nlen) {
-		snprintf(buf, len, "[%s] %.*s %d/%d %s", server, nlen, np,
+		snprintf(buf, len, "[%s] %.*s %d/%u %s", server, nlen, np,
 		    kauth_cred_getasid(cp->gss_clnt_cred),
 		    kauth_cred_getuid(cp->gss_clnt_cred),
 		    cp->gss_clnt_principal ? "" : "[from default cred] ");
 	} else {
-		snprintf(buf, len, "[%s] using default %d/%d ", server,
+		snprintf(buf, len, "[%s] using default %d/%u ", server,
 		    kauth_cred_getasid(cp->gss_clnt_cred),
 		    kauth_cred_getuid(cp->gss_clnt_cred));
 	}
@@ -693,7 +693,7 @@ nfs_gss_clnt_ctx_find_principal(struct nfsreq *req, uint8_t *principal, uint32_t
 					lck_mtx_unlock(cp->gss_clnt_mtx);
 					NFS_GSS_DBG("Marking %s for deletion because %s does not match\n",
 					    NFS_GSS_CTX(req, cp), principal);
-					NFS_GSS_DBG("len = (%d,%d), nt = (%d,%d)\n", cp->gss_clnt_prinlen, plen,
+					NFS_GSS_DBG("len = (%u,%u), nt = (%u,%u)\n", cp->gss_clnt_prinlen, plen,
 					    cp->gss_clnt_prinnt, nt);
 					treq.r_gss_ctx  = cp;
 					cp = NULL;
@@ -971,7 +971,7 @@ retry:
 
 	major = gss_krb5_get_mic_mbuf((uint32_t *)&error, cp->gss_clnt_ctx_id, 0, nmc->nmc_mhead, offset, 0, &mic);
 	if (major != GSS_S_COMPLETE) {
-		printf("gss_krb5_get_mic_buf failed %d\n", error);
+		printf("gss_krb5_get_mic_buf failed %u\n", error);
 		return error;
 	}
 
@@ -1696,7 +1696,7 @@ nfs_gss_clnt_ctx_callserver(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 	 */
 	if (cp->gss_clnt_major != GSS_S_COMPLETE &&
 	    cp->gss_clnt_major != GSS_S_CONTINUE_NEEDED) {
-		printf("nfs_gss_clnt_ctx_callserver: gss_clnt_major = %d\n", cp->gss_clnt_major);
+		printf("nfs_gss_clnt_ctx_callserver: gss_clnt_major = %u\n", cp->gss_clnt_major);
 		nfs_gss_clnt_log_error(req, cp, major, minor);
 	}
 
@@ -1782,7 +1782,7 @@ nfs_gss_clnt_get_upcall_port(kauth_cred_t credp)
 
 	kr = host_get_gssd_port(host_priv_self(), &gssd_host_port);
 	if (kr != KERN_SUCCESS) {
-		printf("nfs_gss_get_upcall_port: can't get gssd port, status %x (%d)\n", kr, kr);
+		printf("nfs_gss_get_upcall_port: can't get gssd port, status %x (%d)\n", (unsigned int)kr, kr);
 		return IPC_PORT_NULL;
 	}
 	if (!IPC_PORT_VALID(gssd_host_port)) {
@@ -1797,7 +1797,7 @@ nfs_gss_clnt_get_upcall_port(kauth_cred_t credp)
 	}
 	kr = mach_gss_lookup(gssd_host_port, uid, asid, &uc_port);
 	if (kr != KERN_SUCCESS) {
-		printf("nfs_gss_clnt_get_upcall_port: mach_gssd_lookup failed: status %x (%d)\n", kr, kr);
+		printf("nfs_gss_clnt_get_upcall_port: mach_gssd_lookup failed: status %x (%d)\n", (unsigned int)kr, kr);
 	}
 	host_release_special_port(gssd_host_port);
 
@@ -1855,20 +1855,20 @@ nfs_gss_clnt_log_error(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp, uint32_t
 		/*
 		 *%%% It would be really nice to get the terminal from the proc or auditinfo_addr struct and print that here.
 		 */
-		printf("NFS: gssd auth failure by %s on audit session %d uid %d proc %s/%d for mount %s. Error: major = %d minor = %d\n",
+		printf("NFS: gssd auth failure by %s on audit session %d uid %u proc %s/%d for mount %s. Error: major = %u minor = %d\n",
 		    cp->gss_clnt_display ? cp->gss_clnt_display : who, kauth_cred_getasid(req->r_cred), kauth_cred_getuid(req->r_cred),
 		    procn, pid, vfs_statfs(nmp->nm_mountp)->f_mntfromname, gss_error, (int32_t)cp->gss_clnt_minor);
 		cp->gss_clnt_ptime = now.tv_sec;
 		switch (gss_error) {
-		case 7: printf("NFS: gssd does not have credentials for session %d/%d, (kinit)?\n",
+		case 7: printf("NFS: gssd does not have credentials for session %d/%u, (kinit)?\n",
 			    kauth_cred_getasid(req->r_cred), kauth_cred_getauid(req->r_cred));
 			break;
-		case 11: printf("NFS: gssd has expired credentals for session %d/%d, (kinit)?\n",
+		case 11: printf("NFS: gssd has expired credentals for session %d/%u, (kinit)?\n",
 			    kauth_cred_getasid(req->r_cred), kauth_cred_getauid(req->r_cred));
 			break;
 		}
 	} else {
-		NFS_GSS_DBG("NFS: gssd auth failure by %s on audit session %d uid %d proc %s/%d for mount %s. Error: major = %d minor = %d\n",
+		NFS_GSS_DBG("NFS: gssd auth failure by %s on audit session %d uid %u proc %s/%d for mount %s. Error: major = %u minor = %d\n",
 		    cp->gss_clnt_display ? cp->gss_clnt_display : who, kauth_cred_getasid(req->r_cred), kauth_cred_getuid(req->r_cred),
 		    procn, pid, vfs_statfs(nmp->nm_mountp)->f_mntfromname, gss_error, (int32_t)cp->gss_clnt_minor);
 	}
