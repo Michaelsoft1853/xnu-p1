@@ -2979,7 +2979,7 @@ restart:
 	if (!(nofp->nof_access & NFS_OPEN_SHARE_ACCESS_READ)) {
 		if (nofp->nof_flags & NFS_OPEN_FILE_NEEDCLOSE) {
 			/* We shouldn't get here. We've already open the file for execve */
-			NP(np, "nfs_vnop_mmap: File already needs close access: 0x%x, cred: %u thread: %lld",
+			NP(np, "nfs_vnop_mmap: File already needs close access: 0x%x, cred: %u thread: %llu",
 			    nofp->nof_access, kauth_cred_getuid(nofp->nof_owner->noo_cred), thread_tid(vfs_context_thread(ctx)));
 		}
 		/*
@@ -3249,8 +3249,6 @@ nfs_lock_owner_find(nfsnode_t np, proc_t p, int alloc)
 tryagain:
 	lck_mtx_lock(&np->n_openlock);
 	TAILQ_FOREACH(nlop, &np->n_lock_owners, nlo_link) {
-		os_ref_count_t newcount;
-
 		if (nlop->nlo_pid != pid) {
 			continue;
 		}
@@ -3261,7 +3259,7 @@ tryagain:
 		if (os_ref_get_count(&nlop->nlo_refcnt)) {
 			TAILQ_REMOVE(&np->n_lock_owners, nlop, nlo_link);
 			nlop->nlo_flags &= ~NFS_LOCK_OWNER_LINK;
-			newcount = os_ref_release_locked(&nlop->nlo_refcnt);
+			os_ref_release_locked(&nlop->nlo_refcnt);
 			lck_mtx_unlock(&np->n_openlock);
 			goto tryagain;
 		}
@@ -6633,7 +6631,7 @@ restart:
 	if (!(nofp->nof_access & NFS_OPEN_SHARE_ACCESS_READ)) {
 		/* we don't have the file open, so open it for read access if we're not denied */
 		if (nofp->nof_flags & NFS_OPEN_FILE_NEEDCLOSE) {
-			NP(np, "nfs_vnop_read: File already needs close access: 0x%x, cred: %u thread: %lld",
+			NP(np, "nfs_vnop_read: File already needs close access: 0x%x, cred: %u thread: %llu",
 			    nofp->nof_access, kauth_cred_getuid(nofp->nof_owner->noo_cred), thread_tid(vfs_context_thread(ctx)));
 		}
 		if (nofp->nof_deny & NFS_OPEN_SHARE_DENY_READ) {
