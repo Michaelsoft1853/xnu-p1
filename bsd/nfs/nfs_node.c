@@ -1428,7 +1428,7 @@ out:
 	microuptime(&then);
 	timersub(&then, &now, &diff);
 
-	NFS_DBG(NFS_FAC_SOCK, 7, "mount_is_dirty for %s took %lld mics for %ld slots and %ld nodes return %d\n",
+	NFS_DBG(NFS_FAC_SOCK, 7, "mount_is_dirty for %s took %llu mics for %lu slots and %lu nodes return %d\n",
 	    vfs_statfs(mp)->f_mntfromname, (uint64_t)diff.tv_sec * 1000000LL + diff.tv_usec, i, ncnt, (i <= nfsnodehash));
 #endif
 
